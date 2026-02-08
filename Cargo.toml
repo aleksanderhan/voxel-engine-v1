@@ -1,0 +1,12 @@
+[package]
+name = "svo_engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winit = "0.30"
+wgpu = "25.0"
+wgpu-profiler = "0.23"
+pollster = "0.4"
+glam = "0.29"
+bytemuck = { version = "1.25", features = ["derive"] }
