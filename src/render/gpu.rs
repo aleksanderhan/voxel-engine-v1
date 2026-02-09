@@ -26,6 +26,7 @@ pub struct GpuState {
     pub uniform_buffer: UniformBuffer,
     pub scene_bind_group: SceneBindGroup,
     pub chunk_manager: ChunkManager,
+    pub palette_buffer: wgpu::Buffer,
     pub chunk_origin: [f32; 4],
     last_chunk_coord: Option<glam::IVec3>,
 }
@@ -87,8 +88,19 @@ impl GpuState {
 
         let uniform_buffer = UniformBuffer::new(&device, size);
         let chunk_manager = ChunkManager::new(&device);
-        let scene_bind_group =
-            SceneBindGroup::new(&device, &uniform_buffer.buffer, &chunk_manager.buffer);
+        let palette_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Palette Buffer"),
+            size: (256 * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let scene_bind_group = SceneBindGroup::new(
+            &device,
+            &uniform_buffer.buffer,
+            &chunk_manager.brick_index_buffer,
+            &chunk_manager.brick_materials_buffer,
+            &palette_buffer,
+        );
 
         let pipeline_layout = create_pipeline_layout(&device, &scene_bind_group.layout);
         let pipeline = create_render_pipeline(&device, &config, &pipeline_layout, &shader);
@@ -106,6 +118,7 @@ impl GpuState {
             uniform_buffer,
             scene_bind_group,
             chunk_manager,
+            palette_buffer,
             chunk_origin: [0.0, 0.0, 0.0, 0.0],
             last_chunk_coord: None,
         }
@@ -122,15 +135,25 @@ impl GpuState {
             self.last_chunk_coord = Some(chunk_coord);
             let origin = (chunk_coord - glam::IVec3::splat(VIEW_RADIUS_CHUNKS))
                 * crate::svo::chunk::CHUNK_SIZE;
-            self.chunk_origin = [
-                origin.x as f32,
-                origin.y as f32,
-                origin.z as f32,
-                0.0,
-            ];
+            self.chunk_origin = [origin.x as f32, origin.y as f32, origin.z as f32, 0.0];
         }
-        self.chunk_manager
-            .update_frame(&self.queue, world, chunk_coord);
+        if self
+            .chunk_manager
+            .update_frame(&self.queue, world, chunk_coord)
+        {
+            self.scene_bind_group = SceneBindGroup::new(
+                &self.device,
+                &self.uniform_buffer.buffer,
+                &self.chunk_manager.brick_index_buffer,
+                &self.chunk_manager.brick_materials_buffer,
+                &self.palette_buffer,
+            );
+        }
+        self.queue.write_buffer(
+            &self.palette_buffer,
+            0,
+            bytemuck::cast_slice(&world.palette),
+        );
     }
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -158,12 +181,7 @@ impl GpuState {
             time,
             fps,
             [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
-            [
-                camera_forward.x,
-                camera_forward.y,
-                camera_forward.z,
-                0.0,
-            ],
+            [camera_forward.x, camera_forward.y, camera_forward.z, 0.0],
             [camera_right.x, camera_right.y, camera_right.z, 0.0],
             [camera_up.x, camera_up.y, camera_up.z, 0.0],
             self.chunk_origin,

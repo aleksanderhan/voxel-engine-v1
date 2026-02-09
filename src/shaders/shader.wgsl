@@ -1,8 +1,12 @@
-const VIEW_SIZE: i32 = 320;
-const VIEW_SIZE_F: f32 = 320.0;
+const VIEW_SIZE: i32 = 960;
+const VIEW_SIZE_F: f32 = 960.0;
 const CHUNK_SIZE: i32 = 64;
-const VIEW_DIAMETER_CHUNKS: i32 = 5;
-const CHUNK_VOLUME: i32 = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+const VIEW_DIAMETER_CHUNKS: i32 = 15;
+const BRICK_SIZE: i32 = 8;
+const BRICKS_PER_AXIS: i32 = CHUNK_SIZE / BRICK_SIZE;
+const BRICKS_PER_CHUNK: i32 = BRICKS_PER_AXIS * BRICKS_PER_AXIS * BRICKS_PER_AXIS;
+const BRICK_VOLUME: i32 = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
+const BRICK_STRIDE_U32: i32 = (BRICK_VOLUME + 3) / 4;
 
 struct Uniforms {
     resolution: vec2<f32>,
@@ -20,8 +24,13 @@ struct Uniforms {
 var<uniform> uniforms: Uniforms;
 
 @group(0) @binding(1)
-var<storage, read> chunk_data: array<u32>;
+var<storage, read> chunk_brick_indices: array<u32>;
 
+@group(0) @binding(2)
+var<storage, read> brick_materials: array<u32>;
+
+@group(0) @binding(3)
+var<storage, read> palette: array<u32>;
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -41,28 +50,45 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
-fn voxel_index(voxel: vec3<i32>) -> u32 {
+fn voxel_index(voxel: vec3<i32>) -> vec3<i32> {
     let chunk = voxel / CHUNK_SIZE;
     let local = voxel - chunk * CHUNK_SIZE;
     let wrapped_chunk = (chunk + uniforms.chunk_wrap_offset.xyz) % VIEW_DIAMETER_CHUNKS;
     let chunk_index =
         wrapped_chunk.x + VIEW_DIAMETER_CHUNKS * (wrapped_chunk.y + VIEW_DIAMETER_CHUNKS * wrapped_chunk.z);
-    let local_index = local.x + CHUNK_SIZE * (local.y + CHUNK_SIZE * local.z);
-    return u32(chunk_index * CHUNK_VOLUME + local_index);
+    let brick_coord = local / BRICK_SIZE;
+    let brick_index = brick_coord.x
+        + BRICKS_PER_AXIS * (brick_coord.y + BRICKS_PER_AXIS * brick_coord.z);
+    let in_brick = local - brick_coord * BRICK_SIZE;
+    let local_index = in_brick.x + BRICK_SIZE * (in_brick.y + BRICK_SIZE * in_brick.z);
+    return vec3<i32>(chunk_index, brick_index, local_index);
 }
 
 fn load_material(voxel: vec3<i32>) -> u32 {
     if any(voxel < vec3<i32>(0)) || any(voxel >= vec3<i32>(VIEW_SIZE)) {
         return 0u;
     }
-    let idx = voxel_index(voxel);
-    return chunk_data[idx];
+    let indices = voxel_index(voxel);
+    let chunk_index = indices.x;
+    let brick_index = indices.y;
+    let local_index = indices.z;
+    let indirection_index = chunk_index * BRICKS_PER_CHUNK + brick_index;
+    let atlas_id = chunk_brick_indices[u32(indirection_index)];
+    if atlas_id == 0u {
+        return 0u;
+    }
+    let word_index = local_index / 4;
+    let shift = (local_index % 4) * 8;
+    let atlas_index = (i32(atlas_id) - 1) * BRICK_STRIDE_U32 + word_index;
+    let packed = brick_materials[u32(atlas_index)];
+    return (packed >> u32(shift)) & 0xFFu;
 }
 
-fn palette_color(color: u32) -> vec3<f32> {
-    if color == 0u {
+fn palette_color(index: u32) -> vec3<f32> {
+    if index == 0u {
         return vec3<f32>(0.0, 0.0, 0.0);
     }
+    let color = palette[index];
     let r = f32(color & 0xFFu) / 255.0;
     let g = f32((color >> 8u) & 0xFFu) / 255.0;
     let b = f32((color >> 16u) & 0xFFu) / 255.0;
