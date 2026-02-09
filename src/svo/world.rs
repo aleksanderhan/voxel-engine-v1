@@ -164,4 +164,13 @@ impl World {
         }
         0
     }
+
+    pub fn surface_height_at(&self, x: i32, z: i32, min_y: i32, max_y: i32) -> Option<i32> {
+        for y in (min_y..=max_y).rev() {
+            if self.sample_density(IVec3::new(x, y, z)) >= 0 {
+                return Some(y);
+            }
+        }
+        None
+    }
 }

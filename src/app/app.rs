@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Instant};
 
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -11,6 +11,7 @@ use winit::{
 };
 
 use crate::app::{CameraController, InputState};
+use crate::chunks::VIEW_SIZE;
 use crate::render::gpu::GpuState;
 use crate::svo::{VoxFile, World};
 
@@ -84,7 +85,27 @@ impl ApplicationHandler for App {
 
         if self.world.chunks.is_empty() {
             match VoxFile::load("assets/models/house.vox") {
-                Ok(vox) => self.world.import_vox_file(&vox, glam::IVec3::ZERO),
+                Ok(vox) => {
+                    if let Some(model) = vox.models.first() {
+                        let world_size = IVec3::new(
+                            model.size[0] as i32,
+                            model.size[2] as i32,
+                            model.size[1] as i32,
+                        );
+                        let map_center = IVec3::splat(VIEW_SIZE / 2);
+                        let origin = map_center - world_size / 2;
+                        let center = map_center;
+                        self.world.import_vox_file(&vox, origin);
+                        let max_y = origin.y + world_size.y - 1;
+                        let surface_y = self.world.surface_height_at(center.x, center.z, origin.y, max_y);
+                        let camera_y = surface_y
+                            .map(|height| height as f32 + 6.0)
+                            .unwrap_or((max_y + 6) as f32);
+                        self.camera.position = Vec3::new(center.x as f32, camera_y, center.z as f32);
+                    } else {
+                        self.world.import_vox_file(&vox, glam::IVec3::ZERO);
+                    }
+                }
                 Err(error) => {
                     eprintln!("Failed to load model: {:?}", error);
                 }
