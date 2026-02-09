@@ -12,6 +12,7 @@ use winit::{
 
 use crate::app::{CameraController, InputState};
 use crate::render::gpu::GpuState;
+use crate::svo::{VoxFile, World};
 
 pub struct App {
     window: Option<Arc<Window>>,
@@ -21,6 +22,7 @@ pub struct App {
     start_time: Option<Instant>,
     last_frame: Option<Instant>,
     fps: f32,
+    world: World,
 }
 
 impl Default for App {
@@ -40,6 +42,7 @@ impl Default for App {
             start_time: None,
             last_frame: None,
             fps: 0.0,
+            world: World::new(),
         }
     }
 }
@@ -68,8 +71,19 @@ impl ApplicationHandler for App {
         self.start_time = Some(now);
         self.last_frame = Some(now);
 
+        if self.world.chunks.is_empty() {
+            match VoxFile::load("assets/models/#treehouse.vox") {
+                Ok(vox) => self.world.import_vox_file(&vox, glam::IVec3::ZERO),
+                Err(error) => {
+                    eprintln!("Failed to load assets/models/#treehouse.vox: {:?}", error);
+                }
+            }
+        }
+
         if let Some(window) = &self.window {
-            self.state = Some(pollster::block_on(GpuState::new(window.clone())));
+            let mut state = pollster::block_on(GpuState::new(window.clone()));
+            state.update_chunk_data(&self.world);
+            self.state = Some(state);
         }
     }
 

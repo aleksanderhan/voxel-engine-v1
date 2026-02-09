@@ -1,6 +1,8 @@
 // src/main.rs
 mod app;
+mod chunk_manager;
 mod render;
+mod svo;
 
 fn main() {
     let event_loop = winit::event_loop::EventLoop::new().unwrap();

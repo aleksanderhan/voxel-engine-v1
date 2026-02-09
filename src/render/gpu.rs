@@ -3,14 +3,16 @@ use std::{sync::Arc};
 use glam::Vec3;
 use winit::{dpi::PhysicalSize, window::Window};
 
+use crate::chunk_manager::ChunkManager;
 use crate::render::{
-    bindgroups::UniformBindGroup,
+    bindgroups::SceneBindGroup,
     buffers::UniformBuffer,
     layouts::create_pipeline_layout,
     pipelines::{create_blit_pipeline, create_render_pipeline},
     shaders::{blit_wgsl, shader_wgsl},
     textures::create_view,
 };
+use crate::svo::world::World;
 
 pub struct GpuState {
     pub window: Arc<Window>,
@@ -22,7 +24,9 @@ pub struct GpuState {
     pub pipeline: wgpu::RenderPipeline,
     pub blit_pipeline: wgpu::RenderPipeline,
     pub uniform_buffer: UniformBuffer,
-    pub uniform_bind_group: UniformBindGroup,
+    pub scene_bind_group: SceneBindGroup,
+    pub chunk_manager: ChunkManager,
+    pub chunk_origin: [f32; 4],
 }
 
 impl GpuState {
@@ -81,9 +85,11 @@ impl GpuState {
         });
 
         let uniform_buffer = UniformBuffer::new(&device, size);
-        let uniform_bind_group = UniformBindGroup::new(&device, &uniform_buffer.buffer);
+        let chunk_manager = ChunkManager::new(&device);
+        let scene_bind_group =
+            SceneBindGroup::new(&device, &uniform_buffer.buffer, &chunk_manager.buffer);
 
-        let pipeline_layout = create_pipeline_layout(&device, &uniform_bind_group.layout);
+        let pipeline_layout = create_pipeline_layout(&device, &scene_bind_group.layout);
         let pipeline = create_render_pipeline(&device, &config, &pipeline_layout, &shader);
         let blit_pipeline = create_blit_pipeline(&device, &config, &pipeline_layout, &blit_shader);
 
@@ -97,8 +103,27 @@ impl GpuState {
             pipeline,
             blit_pipeline,
             uniform_buffer,
-            uniform_bind_group,
+            scene_bind_group,
+            chunk_manager,
+            chunk_origin: [0.0, 0.0, 0.0, 0.0],
         }
+    }
+
+    pub fn update_chunk_data(&mut self, world: &World) {
+        let chunk_coord = world
+            .chunks
+            .keys()
+            .copied()
+            .next()
+            .unwrap_or(glam::IVec3::ZERO);
+        self.chunk_origin = [
+            (chunk_coord.x * crate::svo::chunk::CHUNK_SIZE) as f32,
+            (chunk_coord.y * crate::svo::chunk::CHUNK_SIZE) as f32,
+            (chunk_coord.z * crate::svo::chunk::CHUNK_SIZE) as f32,
+            0.0,
+        ];
+        self.chunk_manager
+            .update_from_world(&self.queue, world, chunk_coord);
     }
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -134,6 +159,7 @@ impl GpuState {
             ],
             [camera_right.x, camera_right.y, camera_right.z, 0.0],
             [camera_up.x, camera_up.y, camera_up.z, 0.0],
+            self.chunk_origin,
         );
     }
 
@@ -162,11 +188,11 @@ impl GpuState {
                 occlusion_query_set: None,
             });
             render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &self.uniform_bind_group.bind_group, &[]);
+            render_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
             render_pass.draw(0..3, 0..1);
 
             render_pass.set_pipeline(&self.blit_pipeline);
-            render_pass.set_bind_group(0, &self.uniform_bind_group.bind_group, &[]);
+            render_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
 
