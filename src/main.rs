@@ -1,6 +1,6 @@
 // src/main.rs
 mod app;
-mod chunk_manager;
+mod chunks;
 mod render;
 mod svo;
 

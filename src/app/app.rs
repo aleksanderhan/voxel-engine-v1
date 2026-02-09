@@ -82,7 +82,7 @@ impl ApplicationHandler for App {
 
         if let Some(window) = &self.window {
             let mut state = pollster::block_on(GpuState::new(window.clone()));
-            state.update_chunk_data(&self.world);
+            state.update_chunk_data(&self.world, self.camera.position);
             self.state = Some(state);
         }
     }
@@ -141,6 +141,7 @@ impl ApplicationHandler for App {
                     }
                     self.camera.update(&mut self.input, dt);
                     let (forward, right, up) = self.camera.basis();
+                    state.update_chunk_data(&self.world, self.camera.position);
                     state.update(elapsed, self.fps, self.camera.position, forward, right, up);
                     if let Err(error) = state.render() {
                         match error {

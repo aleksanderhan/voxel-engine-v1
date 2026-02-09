@@ -13,6 +13,7 @@ pub struct World {
     pub chunks: HashMap<IVec3, Chunk>,
     pub brick_pool: BrickPool,
     pub dynamic_components: Vec<DynamicComponent>,
+    pub palette: [u32; 256],
 }
 
 impl World {
@@ -21,6 +22,7 @@ impl World {
             chunks: HashMap::new(),
             brick_pool: BrickPool::default(),
             dynamic_components: Vec::new(),
+            palette: [0u32; 256],
         }
     }
 
@@ -45,6 +47,7 @@ impl World {
     }
 
     pub fn import_vox_file(&mut self, vox: &VoxFile, origin: VoxelCoord) {
+        self.palette = vox.palette;
         for model in &vox.models {
             self.import_vox_model(model, origin);
         }
@@ -53,7 +56,7 @@ impl World {
     pub fn import_vox_model(&mut self, model: &VoxModel, origin: VoxelCoord) {
         let mut dirty_bricks: HashMap<IVec3, HashSet<IVec3>> = HashMap::new();
         for voxel in &model.voxels {
-            let world = origin + IVec3::new(voxel.x as i32, voxel.y as i32, voxel.z as i32);
+            let world = origin + IVec3::new(voxel.x as i32, voxel.z as i32, voxel.y as i32);
             let (chunk_coord, local_voxel) = chunk_local_from_voxel(world, CHUNK_SIZE);
             let (brick_coord, in_brick) = brick_local_from_voxel(local_voxel, BRICK_SIZE);
             let (pool, chunks) = (&mut self.brick_pool, &mut self.chunks);
