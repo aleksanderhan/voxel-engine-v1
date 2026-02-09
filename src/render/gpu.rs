@@ -3,7 +3,7 @@ use std::{sync::Arc};
 use glam::Vec3;
 use winit::{dpi::PhysicalSize, window::Window};
 
-use crate::chunk_manager::{ChunkManager, VIEW_RADIUS_CHUNKS};
+use crate::chunks::{ChunkManager, VIEW_RADIUS_CHUNKS};
 use crate::render::{
     bindgroups::SceneBindGroup,
     buffers::UniformBuffer,
