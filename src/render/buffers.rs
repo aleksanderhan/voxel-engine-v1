@@ -7,7 +7,7 @@ use winit::dpi::PhysicalSize;
 pub struct Uniforms {
     resolution: [f32; 2],
     time: f32,
-    _padding: f32,
+    fps: f32,
     camera_pos: [f32; 4],
     camera_forward: [f32; 4],
     camera_right: [f32; 4],
@@ -18,6 +18,7 @@ impl Uniforms {
     fn new(
         size: PhysicalSize<u32>,
         time: f32,
+        fps: f32,
         camera_pos: [f32; 4],
         camera_forward: [f32; 4],
         camera_right: [f32; 4],
@@ -26,7 +27,7 @@ impl Uniforms {
         Self {
             resolution: [size.width as f32, size.height as f32],
             time,
-            _padding: 0.0,
+            fps,
             camera_pos,
             camera_forward,
             camera_right,
@@ -38,6 +39,7 @@ impl Uniforms {
         &mut self,
         size: PhysicalSize<u32>,
         time: f32,
+        fps: f32,
         camera_pos: [f32; 4],
         camera_forward: [f32; 4],
         camera_right: [f32; 4],
@@ -45,6 +47,7 @@ impl Uniforms {
     ) {
         self.resolution = [size.width as f32, size.height as f32];
         self.time = time;
+        self.fps = fps;
         self.camera_pos = camera_pos;
         self.camera_forward = camera_forward;
         self.camera_right = camera_right;
@@ -61,6 +64,7 @@ impl UniformBuffer {
     pub fn new(device: &wgpu::Device, size: PhysicalSize<u32>) -> Self {
         let uniforms = Uniforms::new(
             size,
+            0.0,
             0.0,
             [0.0, 2.5, 6.0, 0.0],
             [0.0, -0.2425, -0.9701, 0.0],
@@ -81,6 +85,7 @@ impl UniformBuffer {
         queue: &wgpu::Queue,
         size: PhysicalSize<u32>,
         time: f32,
+        fps: f32,
         camera_pos: [f32; 4],
         camera_forward: [f32; 4],
         camera_right: [f32; 4],
@@ -89,6 +94,7 @@ impl UniformBuffer {
         self.uniforms.update(
             size,
             time,
+            fps,
             camera_pos,
             camera_forward,
             camera_right,

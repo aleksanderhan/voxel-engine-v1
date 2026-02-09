@@ -1,7 +1,7 @@
 struct Uniforms {
     resolution: vec2<f32>,
     time: f32,
-    _padding: f32,
+    fps: f32,
     camera_pos: vec4<f32>,
     camera_forward: vec4<f32>,
     camera_right: vec4<f32>,

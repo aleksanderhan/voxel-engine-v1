@@ -20,6 +20,7 @@ pub struct App {
     camera: CameraController,
     start_time: Option<Instant>,
     last_frame: Option<Instant>,
+    fps: f32,
 }
 
 impl Default for App {
@@ -38,6 +39,7 @@ impl Default for App {
             ),
             start_time: None,
             last_frame: None,
+            fps: 0.0,
         }
     }
 }
@@ -115,9 +117,17 @@ impl ApplicationHandler for App {
                         .last_frame
                         .map_or(0.0, |last| (now - last).as_secs_f32());
                     self.last_frame = Some(now);
+                    if dt > 0.0 {
+                        let instant_fps = 1.0 / dt;
+                        self.fps = if self.fps == 0.0 {
+                            instant_fps
+                        } else {
+                            self.fps * 0.9 + instant_fps * 0.1
+                        };
+                    }
                     self.camera.update(&mut self.input, dt);
                     let (forward, right, up) = self.camera.basis();
-                    state.update(elapsed, self.camera.position, forward, right, up);
+                    state.update(elapsed, self.fps, self.camera.position, forward, right, up);
                     if let Err(error) = state.render() {
                         match error {
                             wgpu::SurfaceError::Lost => {

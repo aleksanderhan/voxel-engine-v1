@@ -7,8 +7,8 @@ use crate::render::{
     bindgroups::UniformBindGroup,
     buffers::UniformBuffer,
     layouts::create_pipeline_layout,
-    pipelines::create_render_pipeline,
-    shaders::shader_wgsl,
+    pipelines::{create_blit_pipeline, create_render_pipeline},
+    shaders::{blit_wgsl, shader_wgsl},
     textures::create_view,
 };
 
@@ -20,6 +20,7 @@ pub struct GpuState {
     pub config: wgpu::SurfaceConfiguration,
     pub size: PhysicalSize<u32>,
     pub pipeline: wgpu::RenderPipeline,
+    pub blit_pipeline: wgpu::RenderPipeline,
     pub uniform_buffer: UniformBuffer,
     pub uniform_bind_group: UniformBindGroup,
 }
@@ -74,12 +75,17 @@ impl GpuState {
             label: Some("Raymarch Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_wgsl().into()),
         });
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Blit Shader"),
+            source: wgpu::ShaderSource::Wgsl(blit_wgsl().into()),
+        });
 
         let uniform_buffer = UniformBuffer::new(&device, size);
         let uniform_bind_group = UniformBindGroup::new(&device, &uniform_buffer.buffer);
 
         let pipeline_layout = create_pipeline_layout(&device, &uniform_bind_group.layout);
         let pipeline = create_render_pipeline(&device, &config, &pipeline_layout, &shader);
+        let blit_pipeline = create_blit_pipeline(&device, &config, &pipeline_layout, &blit_shader);
 
         Self {
             window,
@@ -89,6 +95,7 @@ impl GpuState {
             config,
             size,
             pipeline,
+            blit_pipeline,
             uniform_buffer,
             uniform_bind_group,
         }
@@ -107,6 +114,7 @@ impl GpuState {
     pub fn update(
         &mut self,
         time: f32,
+        fps: f32,
         camera_pos: Vec3,
         camera_forward: Vec3,
         camera_right: Vec3,
@@ -116,6 +124,7 @@ impl GpuState {
             &self.queue,
             self.size,
             time,
+            fps,
             [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
             [
                 camera_forward.x,
@@ -153,6 +162,10 @@ impl GpuState {
                 occlusion_query_set: None,
             });
             render_pass.set_pipeline(&self.pipeline);
+            render_pass.set_bind_group(0, &self.uniform_bind_group.bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+
+            render_pass.set_pipeline(&self.blit_pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group.bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
