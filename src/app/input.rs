@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3};
 use winit::{
-    event::{ElementState, KeyEvent, WindowEvent},
+    event::{DeviceEvent, ElementState, KeyEvent, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
 };
 
@@ -48,6 +48,16 @@ impl InputState {
                     self.look_delta += position - last;
                 }
                 self.last_cursor = Some(position);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn process_device_event(&mut self, event: &DeviceEvent) -> bool {
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                self.look_delta += Vec2::new(delta.0 as f32, delta.1 as f32);
                 true
             }
             _ => false,

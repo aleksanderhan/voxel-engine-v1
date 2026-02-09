@@ -39,17 +39,16 @@ impl CameraController {
             } else {
                 1.0
             };
-            let (forward, right, _) = self.basis();
-            let planar_forward = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
+            let (forward, right, up) = self.basis();
             let direction =
-                (planar_forward * movement.z + right * movement.x + Vec3::Y * movement.y)
-                    .normalize_or_zero();
+                (forward * movement.z + right * movement.x + up * movement.y).normalize_or_zero();
             self.position += direction * self.speed * speed_multiplier * dt_seconds;
         }
 
         let look_delta = input.take_look_delta();
         self.yaw += look_delta.x * self.sensitivity;
-        self.pitch = (self.pitch - look_delta.y * self.sensitivity).clamp(-1.54, 1.54);
+        let max_pitch = std::f32::consts::FRAC_PI_2 - 0.05;
+        self.pitch = (self.pitch - look_delta.y * self.sensitivity).clamp(-max_pitch, max_pitch);
     }
 
     pub fn basis(&self) -> (Vec3, Vec3, Vec3) {
@@ -59,7 +58,8 @@ impl CameraController {
             self.yaw.sin() * self.pitch.cos(),
         )
         .normalize();
-        let right = forward.cross(Vec3::Y).normalize();
+        let reference_up = if forward.y.abs() > 0.999 { Vec3::Z } else { Vec3::Y };
+        let right = forward.cross(reference_up).normalize();
         let up = right.cross(forward).normalize();
         (forward, right, up)
     }

@@ -4,7 +4,7 @@ use glam::Vec3;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
-    event::{KeyEvent, WindowEvent},
+    event::{DeviceEvent, KeyEvent, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{Key, NamedKey},
     window::{CursorGrabMode, Fullscreen, Window, WindowId},
@@ -159,6 +159,15 @@ impl ApplicationHandler for App {
 
             _ => {}
         }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        self.input.process_device_event(&event);
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
