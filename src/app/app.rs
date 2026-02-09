@@ -72,7 +72,7 @@ impl ApplicationHandler for App {
         self.last_frame = Some(now);
 
         if self.world.chunks.is_empty() {
-            match VoxFile::load("assets/models/Medieval.vox") {
+            match VoxFile::load("assets/models/house.vox") {
                 Ok(vox) => self.world.import_vox_file(&vox, glam::IVec3::ZERO),
                 Err(error) => {
                     eprintln!("Failed to load model: {:?}", error);
