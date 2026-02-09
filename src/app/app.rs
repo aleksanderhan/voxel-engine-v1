@@ -23,6 +23,7 @@ pub struct App {
     last_frame: Option<Instant>,
     fps: f32,
     world: World,
+    profile_enabled: bool,
 }
 
 impl Default for App {
@@ -43,6 +44,16 @@ impl Default for App {
             last_frame: None,
             fps: 0.0,
             world: World::new(),
+            profile_enabled: false,
+        }
+    }
+}
+
+impl App {
+    pub fn new(profile_enabled: bool) -> Self {
+        Self {
+            profile_enabled,
+            ..Self::default()
         }
     }
 }
@@ -81,7 +92,10 @@ impl ApplicationHandler for App {
         }
 
         if let Some(window) = &self.window {
-            let mut state = pollster::block_on(GpuState::new(window.clone()));
+            let mut state = pollster::block_on(GpuState::new(
+                window.clone(),
+                self.profile_enabled,
+            ));
             state.update_chunk_data(&self.world, self.camera.position);
             self.state = Some(state);
         }

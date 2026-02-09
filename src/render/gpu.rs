@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use glam::Vec3;
+use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::chunks::{ChunkManager, VIEW_RADIUS_CHUNKS};
@@ -29,10 +30,36 @@ pub struct GpuState {
     pub palette_buffer: wgpu::Buffer,
     pub chunk_origin: [f32; 4],
     last_chunk_coord: Option<glam::IVec3>,
+    profiler: GpuProfiler,
+    pass_stats: HashMap<String, PassTimingStats>,
+    profile_enabled: bool,
+}
+
+#[derive(Debug, Default, Clone)]
+struct PassTimingStats {
+    samples: u64,
+    total_ms: f64,
+    max_ms: f64,
+}
+
+impl PassTimingStats {
+    fn record(&mut self, duration_ms: f64) {
+        self.samples += 1;
+        self.total_ms += duration_ms;
+        self.max_ms = self.max_ms.max(duration_ms);
+    }
+
+    fn average_ms(&self) -> f64 {
+        if self.samples == 0 {
+            0.0
+        } else {
+            self.total_ms / self.samples as f64
+        }
+    }
 }
 
 impl GpuState {
-    pub async fn new(window: Arc<Window>) -> Self {
+    pub async fn new(window: Arc<Window>, profile_enabled: bool) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = instance
@@ -49,7 +76,7 @@ impl GpuState {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Device"),
-                required_features: wgpu::Features::empty(),
+                required_features: adapter.features() & GpuProfiler::ALL_WGPU_TIMER_FEATURES,
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
@@ -105,6 +132,8 @@ impl GpuState {
         let pipeline_layout = create_pipeline_layout(&device, &scene_bind_group.layout);
         let pipeline = create_render_pipeline(&device, &config, &pipeline_layout, &shader);
         let blit_pipeline = create_blit_pipeline(&device, &config, &pipeline_layout, &blit_shader);
+        let profiler = GpuProfiler::new(&device, GpuProfilerSettings::default())
+            .expect("Failed to create GPU profiler");
 
         Self {
             window,
@@ -121,6 +150,9 @@ impl GpuState {
             palette_buffer,
             chunk_origin: [0.0, 0.0, 0.0, 0.0],
             last_chunk_coord: None,
+            profiler,
+            pass_stats: HashMap::new(),
+            profile_enabled,
         }
     }
 
@@ -204,47 +236,96 @@ impl GpuState {
             });
 
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
+            let mut frame_scope = self.profiler.scope("frame", &mut encoder);
+
+            {
+                let mut render_pass = frame_scope.scoped_render_pass(
+                    "raymarch pass",
+                    wgpu::RenderPassDescriptor {
+                        label: Some("Render Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
                     },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
+                );
+                render_pass.set_pipeline(&self.pipeline);
+                render_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
+
+            {
+                let mut render_pass = frame_scope.scoped_render_pass(
+                    "blit pass",
+                    wgpu::RenderPassDescriptor {
+                        label: Some("Blit Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    },
+                );
+                render_pass.set_pipeline(&self.blit_pipeline);
+                render_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
         }
 
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blit Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            render_pass.set_pipeline(&self.blit_pipeline);
-            render_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
-        }
-
+        self.profiler.resolve_queries(&mut encoder);
         self.queue.submit(Some(encoder.finish()));
         output.present();
+        self.profiler.end_frame().expect("Failed to end GPU frame");
+        if let Some(profiling_data) =
+            self.profiler
+                .process_finished_frame(self.queue.get_timestamp_period())
+        {
+            let _ = wgpu_profiler::chrometrace::write_chrometrace(
+                std::path::Path::new("wgpu-profile.json"),
+                &profiling_data,
+            );
+            if self.profile_enabled {
+                self.update_pass_stats(&profiling_data);
+            }
+        }
         Ok(())
+    }
+
+    fn update_pass_stats(&mut self, results: &[wgpu_profiler::GpuTimerQueryResult]) {
+        let mut stack = results.to_vec();
+        while let Some(result) = stack.pop() {
+            if let Some(range) = result.time {
+                let duration_ms = (range.end - range.start) * 1000.0;
+                self.pass_stats
+                    .entry(result.label.clone())
+                    .or_default()
+                    .record(duration_ms);
+            }
+            stack.extend(result.nested_queries);
+        }
+
+        for label in ["raymarch pass", "blit pass"] {
+            if let Some(stats) = self.pass_stats.get(label) {
+                println!(
+                    "[profiler] {label}: avg {:.3} ms, max {:.3} ms over {} samples",
+                    stats.average_ms(),
+                    stats.max_ms,
+                    stats.samples
+                );
+            }
+        }
     }
 }
