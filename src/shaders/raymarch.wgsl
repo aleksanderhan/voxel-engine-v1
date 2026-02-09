@@ -12,11 +12,10 @@ const BRICKS_PER_AXIS: i32 = CHUNK_SIZE / BRICK_SIZE;
 const BRICKS_PER_CHUNK: i32 = BRICKS_PER_AXIS * BRICKS_PER_AXIS * BRICKS_PER_AXIS;
 const BRICK_VOLUME: i32 = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
 const BRICK_STRIDE_U32: i32 = (BRICK_VOLUME + 3) / 4;
+const CHUNK_OCCUPANCY_WORDS: i32 = BRICKS_PER_CHUNK / 32;
 const VIEW_BRICKS: i32 = VIEW_SIZE / BRICK_SIZE;
-const REGION_SIZE_VOXELS: i32 = REGION_SIZE_CHUNKS * CHUNK_SIZE;
-const REGION_SIZE_VOXELS_F: f32 = f32(REGION_SIZE_VOXELS);
-const REGION_COUNT: i32 = VIEW_DIAMETER_REGIONS;
-const REGION_COUNT_F: f32 = f32(REGION_COUNT);
+const REGION_CHUNKS: i32 = REGION_SIZE_CHUNKS * REGION_SIZE_CHUNKS * REGION_SIZE_CHUNKS;
+const REGION_OCCUPANCY_WORDS: i32 = (REGION_CHUNKS + 31) / 32;
 
 struct Uniforms {
     resolution: vec2<f32>,
@@ -188,77 +187,38 @@ fn ray_voxel(ro: vec3<f32>, rd: vec3<f32>) -> Hit {
     var p = ro + rd * t;
     var voxel = vec3<i32>(floor(p));
     voxel = clamp(voxel, vec3<i32>(0), vec3<i32>(VIEW_SIZE - 1));
-    var region = voxel / REGION_SIZE_VOXELS;
-    let step_region = vec3<i32>(select(-1, 1, rd.x >= 0.0), select(-1, 1, rd.y >= 0.0), select(-1, 1, rd.z >= 0.0));
-    let next_region_boundary = vec3<f32>(
-        f32(region.x + select(0, 1, rd.x >= 0.0)) * REGION_SIZE_VOXELS_F,
-        f32(region.y + select(0, 1, rd.y >= 0.0)) * REGION_SIZE_VOXELS_F,
-        f32(region.z + select(0, 1, rd.z >= 0.0)) * REGION_SIZE_VOXELS_F,
+    var brick = voxel / BRICK_SIZE;
+    let step_brick = vec3<i32>(select(-1, 1, rd.x >= 0.0), select(-1, 1, rd.y >= 0.0), select(-1, 1, rd.z >= 0.0));
+    let next_brick_boundary = vec3<f32>(
+        f32(brick.x + select(0, 1, rd.x >= 0.0)) * BRICK_SIZE_F,
+        f32(brick.y + select(0, 1, rd.y >= 0.0)) * BRICK_SIZE_F,
+        f32(brick.z + select(0, 1, rd.z >= 0.0)) * BRICK_SIZE_F,
     );
-    var tmax_region = (next_region_boundary - ro) * inv_dir;
-    let tdelta_region = abs(inv_dir) * REGION_SIZE_VOXELS_F;
+    var tmax_brick = (next_brick_boundary - ro) * inv_dir;
+    let tdelta_brick = abs(inv_dir) * BRICK_SIZE_F;
 
-    for (var region_step = 0; region_step < 128; region_step = region_step + 1) {
-        if any(region < vec3<i32>(0)) || any(region >= vec3<i32>(REGION_COUNT)) {
+    for (var brick_step = 0; brick_step < 512; brick_step = brick_step + 1) {
+        if any(brick < vec3<i32>(0)) || any(brick >= vec3<i32>(VIEW_BRICKS)) {
             break;
         }
+        let chunk = brick / BRICKS_PER_AXIS;
+        let region = chunk / REGION_SIZE_CHUNKS;
         let region_idx = region_index(region);
-        if region_occupancy[u32(region_idx)] != 0u {
-            var brick = voxel / BRICK_SIZE;
-            let step_brick = vec3<i32>(select(-1, 1, rd.x >= 0.0), select(-1, 1, rd.y >= 0.0), select(-1, 1, rd.z >= 0.0));
-            let step_chunk = vec3<i32>(select(-1, 1, rd.x >= 0.0), select(-1, 1, rd.y >= 0.0), select(-1, 1, rd.z >= 0.0));
-            let next_brick_boundary = vec3<f32>(
-                f32(brick.x + select(0, 1, rd.x >= 0.0)) * BRICK_SIZE_F,
-                f32(brick.y + select(0, 1, rd.y >= 0.0)) * BRICK_SIZE_F,
-                f32(brick.z + select(0, 1, rd.z >= 0.0)) * BRICK_SIZE_F,
-            );
-            var tmax_brick = (next_brick_boundary - ro) * inv_dir;
-            let tdelta_brick = abs(inv_dir) * BRICK_SIZE_F;
-            var chunk = brick / BRICKS_PER_AXIS;
-            let next_chunk_boundary = vec3<f32>(
-                f32(chunk.x + select(0, 1, rd.x >= 0.0)) * CHUNK_SIZE_F,
-                f32(chunk.y + select(0, 1, rd.y >= 0.0)) * CHUNK_SIZE_F,
-                f32(chunk.z + select(0, 1, rd.z >= 0.0)) * CHUNK_SIZE_F,
-            );
-            var tmax_chunk = (next_chunk_boundary - ro) * inv_dir;
-            let tdelta_chunk = abs(inv_dir) * CHUNK_SIZE_F;
-
-            for (var brick_step = 0; brick_step < 512; brick_step = brick_step + 1) {
-                if any(brick < vec3<i32>(0)) || any(brick >= vec3<i32>(VIEW_BRICKS)) {
-                    break;
-                }
-                let chunk_idx = chunk_index(chunk);
-                if chunk_occupancy[u32(chunk_idx)] == 0u {
-                    if tmax_chunk.x < tmax_chunk.y {
-                        if tmax_chunk.x < tmax_chunk.z {
-                            chunk.x = chunk.x + step_chunk.x;
-                            t = tmax_chunk.x;
-                            tmax_chunk.x = tmax_chunk.x + tdelta_chunk.x;
-                        } else {
-                            chunk.z = chunk.z + step_chunk.z;
-                            t = tmax_chunk.z;
-                            tmax_chunk.z = tmax_chunk.z + tdelta_chunk.z;
-                        }
-                    } else {
-                        if tmax_chunk.y < tmax_chunk.z {
-                            chunk.y = chunk.y + step_chunk.y;
-                            t = tmax_chunk.y;
-                            tmax_chunk.y = tmax_chunk.y + tdelta_chunk.y;
-                        } else {
-                            chunk.z = chunk.z + step_chunk.z;
-                            t = tmax_chunk.z;
-                            tmax_chunk.z = tmax_chunk.z + tdelta_chunk.z;
-                        }
-                    }
-                    brick = vec3<i32>(floor(ro + rd * t)) / BRICK_SIZE;
-                    let updated_brick_boundary = vec3<f32>(
-                        f32(brick.x + select(0, 1, rd.x >= 0.0)) * BRICK_SIZE_F,
-                        f32(brick.y + select(0, 1, rd.y >= 0.0)) * BRICK_SIZE_F,
-                        f32(brick.z + select(0, 1, rd.z >= 0.0)) * BRICK_SIZE_F,
-                    );
-                    tmax_brick = (updated_brick_boundary - ro) * inv_dir;
-                    continue;
-                }
+        let chunk_in_region = chunk - region * REGION_SIZE_CHUNKS;
+        let region_bit = chunk_in_region.x
+            + REGION_SIZE_CHUNKS * (chunk_in_region.y + REGION_SIZE_CHUNKS * chunk_in_region.z);
+        let region_word = region_bit / 32;
+        let region_mask = 1u << u32(region_bit % 32);
+        let region_base = region_idx * REGION_OCCUPANCY_WORDS;
+        if (region_occupancy[u32(region_base + region_word)] & region_mask) != 0u {
+            let local_brick = brick - chunk * BRICKS_PER_AXIS;
+            let brick_index = local_brick.x
+                + BRICKS_PER_AXIS * (local_brick.y + BRICKS_PER_AXIS * local_brick.z);
+            let chunk_idx = chunk_index(chunk);
+            let chunk_word = brick_index / 32;
+            let chunk_mask = 1u << u32(brick_index % 32);
+            let chunk_base = chunk_idx * CHUNK_OCCUPANCY_WORDS;
+            if (chunk_occupancy[u32(chunk_base + chunk_word)] & chunk_mask) != 0u {
                 let atlas_id = brick_atlas_id(brick);
                 if atlas_id != 0u {
                     let hit = ray_brick(ro, rd, t, tmax, brick, atlas_id);
@@ -266,68 +226,32 @@ fn ray_voxel(ro: vec3<f32>, rd: vec3<f32>) -> Hit {
                         return hit;
                     }
                 }
-                if t > tmax {
-                    break;
-                }
-                if tmax_brick.x < tmax_brick.y {
-                    if tmax_brick.x < tmax_brick.z {
-                        brick.x = brick.x + step_brick.x;
-                        t = tmax_brick.x;
-                        tmax_brick.x = tmax_brick.x + tdelta_brick.x;
-                    } else {
-                        brick.z = brick.z + step_brick.z;
-                        t = tmax_brick.z;
-                        tmax_brick.z = tmax_brick.z + tdelta_brick.z;
-                    }
-                } else {
-                    if tmax_brick.y < tmax_brick.z {
-                        brick.y = brick.y + step_brick.y;
-                        t = tmax_brick.y;
-                        tmax_brick.y = tmax_brick.y + tdelta_brick.y;
-                    } else {
-                        brick.z = brick.z + step_brick.z;
-                        t = tmax_brick.z;
-                        tmax_brick.z = tmax_brick.z + tdelta_brick.z;
-                    }
-                }
-                chunk = brick / BRICKS_PER_AXIS;
-                let updated_chunk_boundary = vec3<f32>(
-                    f32(chunk.x + select(0, 1, rd.x >= 0.0)) * CHUNK_SIZE_F,
-                    f32(chunk.y + select(0, 1, rd.y >= 0.0)) * CHUNK_SIZE_F,
-                    f32(chunk.z + select(0, 1, rd.z >= 0.0)) * CHUNK_SIZE_F,
-                );
-                tmax_chunk = (updated_chunk_boundary - ro) * inv_dir;
-                let region_exit = min(tmax_region.x, min(tmax_region.y, tmax_region.z));
-                if t > region_exit {
-                    break;
-                }
             }
         }
         if t > tmax {
             break;
         }
-        if tmax_region.x < tmax_region.y {
-            if tmax_region.x < tmax_region.z {
-                region.x = region.x + step_region.x;
-                t = tmax_region.x;
-                tmax_region.x = tmax_region.x + tdelta_region.x;
+        if tmax_brick.x < tmax_brick.y {
+            if tmax_brick.x < tmax_brick.z {
+                brick.x = brick.x + step_brick.x;
+                t = tmax_brick.x;
+                tmax_brick.x = tmax_brick.x + tdelta_brick.x;
             } else {
-                region.z = region.z + step_region.z;
-                t = tmax_region.z;
-                tmax_region.z = tmax_region.z + tdelta_region.z;
+                brick.z = brick.z + step_brick.z;
+                t = tmax_brick.z;
+                tmax_brick.z = tmax_brick.z + tdelta_brick.z;
             }
         } else {
-            if tmax_region.y < tmax_region.z {
-                region.y = region.y + step_region.y;
-                t = tmax_region.y;
-                tmax_region.y = tmax_region.y + tdelta_region.y;
+            if tmax_brick.y < tmax_brick.z {
+                brick.y = brick.y + step_brick.y;
+                t = tmax_brick.y;
+                tmax_brick.y = tmax_brick.y + tdelta_brick.y;
             } else {
-                region.z = region.z + step_region.z;
-                t = tmax_region.z;
-                tmax_region.z = tmax_region.z + tdelta_region.z;
+                brick.z = brick.z + step_brick.z;
+                t = tmax_brick.z;
+                tmax_brick.z = tmax_brick.z + tdelta_brick.z;
             }
         }
-        voxel = vec3<i32>(floor(ro + rd * t));
     }
     return Hit(-1.0, 0u, vec3<f32>(0.0, 0.0, 0.0));
 }

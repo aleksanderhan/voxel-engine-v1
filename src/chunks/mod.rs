@@ -21,6 +21,11 @@ const WINDOW_REGION_COUNT: usize = (VIEW_DIAMETER_REGIONS as usize)
     * (VIEW_DIAMETER_REGIONS as usize)
     * (VIEW_DIAMETER_REGIONS as usize);
 const BRICK_PACKED_STRIDE_U32: usize = (BRICK_VOLUME + 3) / 4;
+const CHUNK_OCCUPANCY_WORDS: usize = BRICKS_PER_CHUNK / 32;
+const REGION_CHUNKS: usize = (REGION_SIZE_CHUNKS as usize)
+    * (REGION_SIZE_CHUNKS as usize)
+    * (REGION_SIZE_CHUNKS as usize);
+const REGION_OCCUPANCY_WORDS: usize = (REGION_CHUNKS + 31) / 32;
 
 pub struct ChunkManager {
     pub brick_index_buffer: wgpu::Buffer,
@@ -55,14 +60,14 @@ impl ChunkManager {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let chunk_occupancy = vec![0u32; WINDOW_CHUNK_COUNT];
+        let chunk_occupancy = vec![0u32; WINDOW_CHUNK_COUNT * CHUNK_OCCUPANCY_WORDS];
         let chunk_occupancy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Chunk Occupancy"),
             size: (chunk_occupancy.len() * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let region_occupancy = vec![0u32; WINDOW_REGION_COUNT];
+        let region_occupancy = vec![0u32; WINDOW_REGION_COUNT * REGION_OCCUPANCY_WORDS];
         let region_occupancy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Region Occupancy"),
             size: (region_occupancy.len() * std::mem::size_of::<u32>()) as u64,
@@ -171,11 +176,20 @@ impl ChunkManager {
                     let Some(chunk) = world.chunks.get(&world_chunk) else {
                         continue;
                     };
-                    let mut chunk_has_brick = false;
                     let region_offset = chunk_offset / REGION_SIZE_CHUNKS;
                     let region_index = self.storage_region_index(
                         self.storage_region_offset(region_offset),
                     );
+                    let chunk_in_region = chunk_offset - region_offset * REGION_SIZE_CHUNKS;
+                    let region_bit = (chunk_in_region.x as usize)
+                        + (REGION_SIZE_CHUNKS as usize)
+                            * ((chunk_in_region.y as usize)
+                                + (REGION_SIZE_CHUNKS as usize)
+                                    * (chunk_in_region.z as usize));
+                    let region_word = region_bit / 32;
+                    let region_mask = 1u32 << (region_bit % 32);
+                    let region_base = region_index * REGION_OCCUPANCY_WORDS;
+                    let chunk_base = idx * CHUNK_OCCUPANCY_WORDS;
                     for bz in 0..BRICKS_PER_AXIS {
                         for by in 0..BRICKS_PER_AXIS {
                             for bx in 0..BRICKS_PER_AXIS {
@@ -188,8 +202,10 @@ impl ChunkManager {
                                 if brick.summary.state == BrickState::Empty {
                                     continue;
                                 }
-                                chunk_has_brick = true;
-                                self.region_occupancy[region_index] = 1;
+                                let brick_word = brick_idx / 32;
+                                let brick_mask = 1u32 << (brick_idx % 32);
+                                self.chunk_occupancy[chunk_base + brick_word] |= brick_mask;
+                                self.region_occupancy[region_base + region_word] |= region_mask;
                                 let compact_id = if let Some(&compact) = brick_map.get(&brick_id) {
                                     compact
                                 } else {
@@ -202,9 +218,6 @@ impl ChunkManager {
                                 self.brick_indices[base_index + brick_idx] = compact_id;
                             }
                         }
-                    }
-                    if chunk_has_brick {
-                        self.chunk_occupancy[idx] = 1;
                     }
                 }
             }
