@@ -1,5 +1,5 @@
-const VIEW_SIZE: i32 = 192;
-const VIEW_SIZE_F: f32 = 192.0;
+const VIEW_SIZE: i32 = 320;
+const VIEW_SIZE_F: f32 = 320.0;
 
 struct Uniforms {
     resolution: vec2<f32>,
@@ -100,7 +100,7 @@ fn ray_voxel(ro: vec3<f32>, rd: vec3<f32>) -> Hit {
     var tmax_vec = (next_boundary - ro) * inv_dir;
     let tdelta = abs(inv_dir);
 
-    for (var i = 0; i < 512; i = i + 1) {
+    for (var i = 0; i < 1024; i = i + 1) {
         let mat = load_material(voxel);
         if mat > 0u {
             return Hit(t, mat);
