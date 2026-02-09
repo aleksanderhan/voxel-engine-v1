@@ -3,7 +3,7 @@ use std::{sync::Arc};
 use glam::Vec3;
 use winit::{dpi::PhysicalSize, window::Window};
 
-use crate::chunk_manager::ChunkManager;
+use crate::chunk_manager::{ChunkManager, VIEW_RADIUS_CHUNKS};
 use crate::render::{
     bindgroups::SceneBindGroup,
     buffers::UniformBuffer,
@@ -27,6 +27,7 @@ pub struct GpuState {
     pub scene_bind_group: SceneBindGroup,
     pub chunk_manager: ChunkManager,
     pub chunk_origin: [f32; 4],
+    last_chunk_coord: Option<glam::IVec3>,
 }
 
 impl GpuState {
@@ -106,20 +107,27 @@ impl GpuState {
             scene_bind_group,
             chunk_manager,
             chunk_origin: [0.0, 0.0, 0.0, 0.0],
+            last_chunk_coord: None,
         }
     }
 
-    pub fn update_chunk_data(&mut self, world: &World) {
-        let chunk_coord = world
-            .chunks
-            .keys()
-            .copied()
-            .next()
-            .unwrap_or(glam::IVec3::ZERO);
+    pub fn update_chunk_data(&mut self, world: &World, camera_pos: Vec3) {
+        let chunk_size = crate::svo::chunk::CHUNK_SIZE as f32;
+        let chunk_coord = glam::IVec3::new(
+            (camera_pos.x / chunk_size).floor() as i32,
+            (camera_pos.y / chunk_size).floor() as i32,
+            (camera_pos.z / chunk_size).floor() as i32,
+        );
+        if self.last_chunk_coord == Some(chunk_coord) {
+            return;
+        }
+        self.last_chunk_coord = Some(chunk_coord);
+        let origin = (chunk_coord - glam::IVec3::splat(VIEW_RADIUS_CHUNKS))
+            * crate::svo::chunk::CHUNK_SIZE;
         self.chunk_origin = [
-            (chunk_coord.x * crate::svo::chunk::CHUNK_SIZE) as f32,
-            (chunk_coord.y * crate::svo::chunk::CHUNK_SIZE) as f32,
-            (chunk_coord.z * crate::svo::chunk::CHUNK_SIZE) as f32,
+            origin.x as f32,
+            origin.y as f32,
+            origin.z as f32,
             0.0,
         ];
         self.chunk_manager

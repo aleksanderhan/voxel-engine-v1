@@ -1,3 +1,6 @@
+const VIEW_SIZE: i32 = 192;
+const VIEW_SIZE_F: f32 = 192.0;
+
 struct Uniforms {
     resolution: vec2<f32>,
     time: f32,
@@ -35,35 +38,54 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 fn voxel_index(voxel: vec3<i32>) -> u32 {
-    let size = 64;
+    let size = VIEW_SIZE;
     return u32(voxel.x + size * (voxel.y + size * voxel.z));
 }
 
 fn load_material(voxel: vec3<i32>) -> u32 {
-    if any(voxel < vec3<i32>(0)) || any(voxel >= vec3<i32>(64)) {
+    if any(voxel < vec3<i32>(0)) || any(voxel >= vec3<i32>(VIEW_SIZE)) {
         return 0u;
     }
     let idx = voxel_index(voxel);
     return chunk_data[idx];
 }
 
+fn voxel_filled(voxel: vec3<i32>) -> f32 {
+    return select(0.0, 1.0, load_material(voxel) > 0u);
+}
+
 fn estimate_normal(voxel: vec3<i32>) -> vec3<f32> {
-    let dx = f32(load_material(voxel + vec3<i32>(1, 0, 0))) - f32(load_material(voxel - vec3<i32>(1, 0, 0)));
-    let dy = f32(load_material(voxel + vec3<i32>(0, 1, 0))) - f32(load_material(voxel - vec3<i32>(0, 1, 0)));
-    let dz = f32(load_material(voxel + vec3<i32>(0, 0, 1))) - f32(load_material(voxel - vec3<i32>(0, 0, 1)));
+    let dx = voxel_filled(voxel + vec3<i32>(1, 0, 0)) - voxel_filled(voxel - vec3<i32>(1, 0, 0));
+    let dy = voxel_filled(voxel + vec3<i32>(0, 1, 0)) - voxel_filled(voxel - vec3<i32>(0, 1, 0));
+    let dz = voxel_filled(voxel + vec3<i32>(0, 0, 1)) - voxel_filled(voxel - vec3<i32>(0, 0, 1));
     return normalize(vec3<f32>(dx, dy, dz));
 }
 
-fn ray_voxel(ro: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
+fn palette_color(color: u32) -> vec3<f32> {
+    if color == 0u {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    let r = f32(color & 0xFFu) / 255.0;
+    let g = f32((color >> 8u) & 0xFFu) / 255.0;
+    let b = f32((color >> 16u) & 0xFFu) / 255.0;
+    return vec3<f32>(r, g, b);
+}
+
+struct Hit {
+    t: f32,
+    material: u32,
+};
+
+fn ray_voxel(ro: vec3<f32>, rd: vec3<f32>) -> Hit {
     let bounds_min = vec3<f32>(0.0, 0.0, 0.0);
-    let bounds_max = vec3<f32>(64.0, 64.0, 64.0);
+    let bounds_max = vec3<f32>(VIEW_SIZE_F, VIEW_SIZE_F, VIEW_SIZE_F);
     let inv_dir = 1.0 / rd;
     let t0 = (bounds_min - ro) * inv_dir;
     let t1 = (bounds_max - ro) * inv_dir;
     let tmin = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
     let tmax = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), max(t0.z, t1.z));
     if tmax < max(tmin, 0.0) {
-        return vec4<f32>(-1.0, 0.0, 0.0, 0.0);
+        return Hit(-1.0, 0u);
     }
 
     var t = max(tmin, 0.0);
@@ -81,7 +103,7 @@ fn ray_voxel(ro: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
     for (var i = 0; i < 512; i = i + 1) {
         let mat = load_material(voxel);
         if mat > 0u {
-            return vec4<f32>(t, f32(mat), f32(voxel.x), f32(voxel.y));
+            return Hit(t, mat);
         }
         if tmax_vec.x < tmax_vec.y {
             if tmax_vec.x < tmax_vec.z {
@@ -108,7 +130,7 @@ fn ray_voxel(ro: vec3<f32>, rd: vec3<f32>) -> vec4<f32> {
             break;
         }
     }
-    return vec4<f32>(-1.0, 0.0, 0.0, 0.0);
+    return Hit(-1.0, 0u);
 }
 
 @fragment
@@ -125,21 +147,19 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let rd = normalize(screen.x * right + screen.y * up + 1.6 * forward);
 
     let hit = ray_voxel(ro, rd);
-    if hit.x < 0.0 {
+    if hit.t < 0.0 {
         let sky = mix(vec3<f32>(0.6, 0.8, 1.0), vec3<f32>(0.1, 0.2, 0.4), clamp(uv.y + 0.2, 0.0, 1.0));
         return vec4<f32>(sky, 1.0);
     }
 
-    let p = ro + rd * hit.x;
+    let p = ro + rd * hit.t;
     let voxel = vec3<i32>(floor(p));
     let normal = estimate_normal(voxel);
     let light_dir = normalize(vec3<f32>(0.6, 1.0, 0.4));
     let diffuse = max(dot(normal, light_dir), 0.0);
     let ambient = 0.25;
 
-    let palette = vec3<f32>(0.2, 0.6, 0.9);
-    let material = hit.y / 255.0;
-    let base_color = mix(vec3<f32>(0.1, 0.1, 0.1), palette, material);
+    let base_color = palette_color(hit.material);
 
     let color = base_color * (ambient + diffuse);
     return vec4<f32>(color, 1.0);

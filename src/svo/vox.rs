@@ -19,6 +19,7 @@ pub struct VoxModel {
 #[derive(Debug, Clone)]
 pub struct VoxFile {
     pub models: Vec<VoxModel>,
+    pub palette: [u32; 256],
 }
 
 #[derive(Debug)]
@@ -47,6 +48,7 @@ impl VoxFile {
         let mut cursor = 8usize;
         let mut models = Vec::new();
         let mut current_size: Option<[u32; 3]> = None;
+        let mut palette = [0u32; 256];
 
         while cursor + 12 <= data.len() {
             let id = &data[cursor..cursor + 4];
@@ -83,6 +85,23 @@ impl VoxFile {
                     let size = current_size.unwrap_or([0, 0, 0]);
                     models.push(VoxModel { size, voxels });
                 }
+                b"RGBA" => {
+                    for i in 0..256 {
+                        if cursor + 4 > data.len() {
+                            return Err(VoxError::UnexpectedEof);
+                        }
+                        let color = u32::from_le_bytes([
+                            data[cursor],
+                            data[cursor + 1],
+                            data[cursor + 2],
+                            data[cursor + 3],
+                        ]);
+                        cursor += 4;
+                        if i < 255 {
+                            palette[i + 1] = color;
+                        }
+                    }
+                }
                 _ => {
                 }
             }
@@ -94,7 +113,14 @@ impl VoxFile {
             let _ = children_size;
         }
 
-        Ok(Self { models })
+        if palette.iter().all(|&color| color == 0) {
+            for i in 1..256 {
+                let value = i as u32;
+                palette[i] = 0xFF00_0000 | (value << 16) | (value << 8) | value;
+            }
+        }
+
+        Ok(Self { models, palette })
     }
 }
 
