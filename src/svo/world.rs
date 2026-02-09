@@ -55,8 +55,10 @@ impl World {
 
     pub fn import_vox_model(&mut self, model: &VoxModel, origin: VoxelCoord) {
         let mut dirty_bricks: HashMap<IVec3, HashSet<IVec3>> = HashMap::new();
+        let model_origin = origin + model.offset;
         for voxel in &model.voxels {
-            let world = origin + IVec3::new(voxel.x as i32, voxel.z as i32, voxel.y as i32);
+            let world =
+                model_origin + IVec3::new(voxel.x as i32, voxel.z as i32, voxel.y as i32);
             let (chunk_coord, local_voxel) = chunk_local_from_voxel(world, CHUNK_SIZE);
             let (brick_coord, in_brick) = brick_local_from_voxel(local_voxel, BRICK_SIZE);
             let (pool, chunks) = (&mut self.brick_pool, &mut self.chunks);
