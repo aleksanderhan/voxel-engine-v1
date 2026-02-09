@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 
 use glam::Vec3;
 use winit::{dpi::PhysicalSize, window::Window};
@@ -118,20 +118,19 @@ impl GpuState {
             (camera_pos.y / chunk_size).floor() as i32,
             (camera_pos.z / chunk_size).floor() as i32,
         );
-        if self.last_chunk_coord == Some(chunk_coord) {
-            return;
+        if self.last_chunk_coord != Some(chunk_coord) {
+            self.last_chunk_coord = Some(chunk_coord);
+            let origin = (chunk_coord - glam::IVec3::splat(VIEW_RADIUS_CHUNKS))
+                * crate::svo::chunk::CHUNK_SIZE;
+            self.chunk_origin = [
+                origin.x as f32,
+                origin.y as f32,
+                origin.z as f32,
+                0.0,
+            ];
         }
-        self.last_chunk_coord = Some(chunk_coord);
-        let origin = (chunk_coord - glam::IVec3::splat(VIEW_RADIUS_CHUNKS))
-            * crate::svo::chunk::CHUNK_SIZE;
-        self.chunk_origin = [
-            origin.x as f32,
-            origin.y as f32,
-            origin.z as f32,
-            0.0,
-        ];
         self.chunk_manager
-            .update_from_world(&self.queue, world, chunk_coord);
+            .update_frame(&self.queue, world, chunk_coord);
     }
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -168,6 +167,12 @@ impl GpuState {
             [camera_right.x, camera_right.y, camera_right.z, 0.0],
             [camera_up.x, camera_up.y, camera_up.z, 0.0],
             self.chunk_origin,
+            [
+                self.chunk_manager.chunk_wrap_offset().x,
+                self.chunk_manager.chunk_wrap_offset().y,
+                self.chunk_manager.chunk_wrap_offset().z,
+                0,
+            ],
         );
     }
 
@@ -198,7 +203,23 @@ impl GpuState {
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
             render_pass.draw(0..3, 0..1);
+        }
 
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Blit Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
             render_pass.set_pipeline(&self.blit_pipeline);
             render_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
             render_pass.draw(0..3, 0..1);

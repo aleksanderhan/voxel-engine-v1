@@ -1,5 +1,8 @@
 const VIEW_SIZE: i32 = 320;
 const VIEW_SIZE_F: f32 = 320.0;
+const CHUNK_SIZE: i32 = 64;
+const VIEW_DIAMETER_CHUNKS: i32 = 5;
+const CHUNK_VOLUME: i32 = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 
 struct Uniforms {
     resolution: vec2<f32>,
@@ -10,6 +13,7 @@ struct Uniforms {
     camera_right: vec4<f32>,
     camera_up: vec4<f32>,
     chunk_origin: vec4<f32>,
+    chunk_wrap_offset: vec4<i32>,
 };
 
 @group(0) @binding(0)
@@ -38,8 +42,13 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 fn voxel_index(voxel: vec3<i32>) -> u32 {
-    let size = VIEW_SIZE;
-    return u32(voxel.x + size * (voxel.y + size * voxel.z));
+    let chunk = voxel / CHUNK_SIZE;
+    let local = voxel - chunk * CHUNK_SIZE;
+    let wrapped_chunk = (chunk + uniforms.chunk_wrap_offset.xyz) % VIEW_DIAMETER_CHUNKS;
+    let chunk_index =
+        wrapped_chunk.x + VIEW_DIAMETER_CHUNKS * (wrapped_chunk.y + VIEW_DIAMETER_CHUNKS * wrapped_chunk.z);
+    let local_index = local.x + CHUNK_SIZE * (local.y + CHUNK_SIZE * local.z);
+    return u32(chunk_index * CHUNK_VOLUME + local_index);
 }
 
 fn load_material(voxel: vec3<i32>) -> u32 {
