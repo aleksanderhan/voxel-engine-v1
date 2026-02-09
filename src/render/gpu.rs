@@ -1,6 +1,6 @@
 use std::{sync::Arc};
 
-
+use glam::Vec3;
 use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::render::{
@@ -104,8 +104,28 @@ impl GpuState {
         self.surface.configure(&self.device, &self.config);
     }
 
-    pub fn update(&mut self, time: f32) {
-        self.uniform_buffer.update(&self.queue, self.size, time);
+    pub fn update(
+        &mut self,
+        time: f32,
+        camera_pos: Vec3,
+        camera_forward: Vec3,
+        camera_right: Vec3,
+        camera_up: Vec3,
+    ) {
+        self.uniform_buffer.update(
+            &self.queue,
+            self.size,
+            time,
+            [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
+            [
+                camera_forward.x,
+                camera_forward.y,
+                camera_forward.z,
+                0.0,
+            ],
+            [camera_right.x, camera_right.y, camera_right.z, 0.0],
+            [camera_up.x, camera_up.y, camera_up.z, 0.0],
+        );
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {

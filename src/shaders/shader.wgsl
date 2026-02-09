@@ -2,6 +2,10 @@ struct Uniforms {
     resolution: vec2<f32>,
     time: f32,
     _padding: f32,
+    camera_pos: vec4<f32>,
+    camera_forward: vec4<f32>,
+    camera_right: vec4<f32>,
+    camera_up: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -76,11 +80,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let aspect = resolution.x / resolution.y;
     let screen = vec2<f32>(uv.x * aspect, uv.y);
 
-    let ro = vec3<f32>(0.0, 2.5, 6.0);
-    let _target = vec3<f32>(0.0, 1.0, 0.0);
-    let forward = normalize(_target - ro);
-    let right = normalize(cross(forward, vec3<f32>(0.0, 1.0, 0.0)));
-    let up = cross(right, forward);
+    let ro = uniforms.camera_pos.xyz;
+    let forward = uniforms.camera_forward.xyz;
+    let right = uniforms.camera_right.xyz;
+    let up = uniforms.camera_up.xyz;
     let rd = normalize(screen.x * right + screen.y * up + 1.6 * forward);
 
     let hit = raymarch(ro, rd);
