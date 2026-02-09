@@ -1,7 +1,5 @@
 use std::{sync::Arc, time::Instant};
 
-use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -11,7 +9,14 @@ use winit::{
     window::{Fullscreen, Window, WindowId},
 };
 
-use crate::render::shaders::shader_wgsl;
+use crate::render::{
+    bindgroups::UniformBindGroup,
+    buffers::UniformBuffer,
+    layouts::create_pipeline_layout,
+    pipelines::create_render_pipeline,
+    shaders::shader_wgsl,
+    textures::create_view,
+};
 
 #[derive(Default)]
 pub struct App {
@@ -94,29 +99,6 @@ impl ApplicationHandler for App {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Uniforms {
-    resolution: [f32; 2],
-    time: f32,
-    _padding: f32,
-}
-
-impl Uniforms {
-    fn new(size: PhysicalSize<u32>, time: f32) -> Self {
-        Self {
-            resolution: [size.width as f32, size.height as f32],
-            time,
-            _padding: 0.0,
-        }
-    }
-
-    fn update(&mut self, size: PhysicalSize<u32>, time: f32) {
-        self.resolution = [size.width as f32, size.height as f32];
-        self.time = time;
-    }
-}
-
 struct GpuState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -125,9 +107,8 @@ struct GpuState {
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
-    uniforms: Uniforms,
+    uniform_buffer: UniformBuffer,
+    uniform_bind_group: UniformBindGroup,
 }
 
 impl GpuState {
@@ -181,77 +162,11 @@ impl GpuState {
             source: wgpu::ShaderSource::Wgsl(shader_wgsl().into()),
         });
 
-        let uniforms = Uniforms::new(size, 0.0);
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let uniform_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Uniform Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let uniform_buffer = UniformBuffer::new(&device, size);
+        let uniform_bind_group = UniformBindGroup::new(&device, &uniform_buffer.buffer);
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Pipeline Layout"),
-            bind_group_layouts: &[&uniform_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        });
+        let pipeline_layout = create_pipeline_layout(&device, &uniform_bind_group.layout);
+        let pipeline = create_render_pipeline(&device, &config, &pipeline_layout, &shader);
 
         Self {
             window,
@@ -263,7 +178,6 @@ impl GpuState {
             pipeline,
             uniform_buffer,
             uniform_bind_group,
-            uniforms,
         }
     }
 
@@ -278,14 +192,12 @@ impl GpuState {
     }
 
     fn update(&mut self, time: f32) {
-        self.uniforms.update(self.size, time);
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
+        self.uniform_buffer.update(&self.queue, self.size, time);
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = create_view(&output);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -308,7 +220,7 @@ impl GpuState {
                 occlusion_query_set: None,
             });
             render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.uniform_bind_group.bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
 
