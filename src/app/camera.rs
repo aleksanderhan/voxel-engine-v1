@@ -47,11 +47,7 @@ impl CameraController {
 
         let look_delta = input.take_look_delta();
         self.yaw += look_delta.x * self.sensitivity;
-<<<<<<< ours
         let max_pitch = std::f32::consts::FRAC_PI_2 - 0.05;
-=======
-        let max_pitch = std::f32::consts::FRAC_PI_2 - 0.01;
->>>>>>> theirs
         self.pitch = (self.pitch - look_delta.y * self.sensitivity).clamp(-max_pitch, max_pitch);
     }
 
