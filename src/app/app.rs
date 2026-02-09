@@ -1,16 +1,17 @@
 use std::{sync::Arc, time::Instant};
 
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
-    event::{KeyEvent, WindowEvent},
+    event::{DeviceEvent, KeyEvent, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{Key, NamedKey},
     window::{CursorGrabMode, Fullscreen, Window, WindowId},
 };
 
 use crate::app::{CameraController, InputState};
+use crate::chunks::VIEW_SIZE;
 use crate::render::gpu::GpuState;
 use crate::svo::{VoxFile, World};
 
@@ -23,6 +24,7 @@ pub struct App {
     last_frame: Option<Instant>,
     fps: f32,
     world: World,
+    profile_enabled: bool,
 }
 
 impl Default for App {
@@ -43,6 +45,16 @@ impl Default for App {
             last_frame: None,
             fps: 0.0,
             world: World::new(),
+            profile_enabled: false,
+        }
+    }
+}
+
+impl App {
+    pub fn new(profile_enabled: bool) -> Self {
+        Self {
+            profile_enabled,
+            ..Self::default()
         }
     }
 }
@@ -72,16 +84,39 @@ impl ApplicationHandler for App {
         self.last_frame = Some(now);
 
         if self.world.chunks.is_empty() {
-            match VoxFile::load("assets/models/#treehouse.vox") {
-                Ok(vox) => self.world.import_vox_file(&vox, glam::IVec3::ZERO),
+            match VoxFile::load("assets/models/house.vox") {
+                Ok(vox) => {
+                    if let Some(model) = vox.models.first() {
+                        let world_size = IVec3::new(
+                            model.size[0] as i32,
+                            model.size[2] as i32,
+                            model.size[1] as i32,
+                        );
+                        let map_center = IVec3::splat(VIEW_SIZE / 2);
+                        let origin = map_center - world_size / 2;
+                        let center = map_center;
+                        self.world.import_vox_file(&vox, origin);
+                        let max_y = origin.y + world_size.y - 1;
+                        let surface_y = self.world.surface_height_at(center.x, center.z, origin.y, max_y);
+                        let camera_y = surface_y
+                            .map(|height| height as f32 + 6.0)
+                            .unwrap_or((max_y + 6) as f32);
+                        self.camera.position = Vec3::new(center.x as f32, camera_y, center.z as f32);
+                    } else {
+                        self.world.import_vox_file(&vox, glam::IVec3::ZERO);
+                    }
+                }
                 Err(error) => {
-                    eprintln!("Failed to load assets/models/#treehouse.vox: {:?}", error);
+                    eprintln!("Failed to load model: {:?}", error);
                 }
             }
         }
 
         if let Some(window) = &self.window {
-            let mut state = pollster::block_on(GpuState::new(window.clone()));
+            let mut state = pollster::block_on(GpuState::new(
+                window.clone(),
+                self.profile_enabled,
+            ));
             state.update_chunk_data(&self.world, self.camera.position);
             self.state = Some(state);
         }
@@ -159,6 +194,15 @@ impl ApplicationHandler for App {
 
             _ => {}
         }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        self.input.process_device_event(&event);
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {

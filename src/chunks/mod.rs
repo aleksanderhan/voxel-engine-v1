@@ -1,113 +1,90 @@
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::HashMap;
 
 use glam::IVec3;
-use rayon::prelude::*;
-use rayon::{ThreadPool, ThreadPoolBuilder};
 
+use crate::svo::brick::{BrickState, BRICK_VOLUME};
 use crate::svo::chunk::CHUNK_SIZE;
+use crate::svo::chunk::{Chunk, BRICKS_PER_AXIS, BRICKS_PER_CHUNK};
 use crate::svo::world::World;
 
-pub const VIEW_RADIUS_CHUNKS: i32 = 2;
+pub const VIEW_RADIUS_CHUNKS: i32 = 7;
 pub const VIEW_DIAMETER_CHUNKS: i32 = VIEW_RADIUS_CHUNKS * 2 + 1;
 pub const VIEW_SIZE: i32 = CHUNK_SIZE * VIEW_DIAMETER_CHUNKS;
-pub const VIEW_VOLUME: usize = (VIEW_SIZE as usize)
-    * (VIEW_SIZE as usize)
-    * (VIEW_SIZE as usize);
+pub const REGION_SIZE_CHUNKS: i32 = 4;
+pub const VIEW_DIAMETER_REGIONS: i32 =
+    (VIEW_DIAMETER_CHUNKS + REGION_SIZE_CHUNKS - 1) / REGION_SIZE_CHUNKS;
 
-const CHUNK_VOLUME: usize = (CHUNK_SIZE as usize)
-    * (CHUNK_SIZE as usize)
-    * (CHUNK_SIZE as usize);
 const WINDOW_CHUNK_COUNT: usize = (VIEW_DIAMETER_CHUNKS as usize)
     * (VIEW_DIAMETER_CHUNKS as usize)
     * (VIEW_DIAMETER_CHUNKS as usize);
-const CPU_VOXEL_BUDGET: usize = CHUNK_VOLUME * 2;
-const GPU_UPLOAD_BUDGET_BYTES: usize = 256 * 1024;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WorkUnit {
-    chunk_offset: IVec3,
-    priority: i32,
-}
-
-impl Ord for WorkUnit {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.priority
-            .cmp(&other.priority)
-            .then_with(|| self.chunk_offset.z.cmp(&other.chunk_offset.z))
-            .then_with(|| self.chunk_offset.y.cmp(&other.chunk_offset.y))
-            .then_with(|| self.chunk_offset.x.cmp(&other.chunk_offset.x))
-    }
-}
-
-impl PartialOrd for WorkUnit {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirtyRange {
-    start: usize,
-    end: usize,
-}
-
-impl DirtyRange {
-    fn len(&self) -> usize {
-        self.end.saturating_sub(self.start)
-    }
-}
+const WINDOW_REGION_COUNT: usize = (VIEW_DIAMETER_REGIONS as usize)
+    * (VIEW_DIAMETER_REGIONS as usize)
+    * (VIEW_DIAMETER_REGIONS as usize);
+const BRICK_PACKED_STRIDE_U32: usize = (BRICK_VOLUME + 3) / 4;
 
 pub struct ChunkManager {
-    pub buffer: wgpu::Buffer,
-    data: Vec<u32>,
-    chunk_states: Vec<u8>,
-    work_queue: BinaryHeap<WorkUnit>,
-    urgent_queue: VecDeque<WorkUnit>,
-    pending_dirty: Vec<DirtyRange>,
-    merged_dirty: Vec<DirtyRange>,
-    scratch_dirty: Vec<DirtyRange>,
+    pub brick_index_buffer: wgpu::Buffer,
+    pub brick_materials_buffer: wgpu::Buffer,
+    pub chunk_occupancy_buffer: wgpu::Buffer,
+    pub region_occupancy_buffer: wgpu::Buffer,
+    brick_indices: Vec<u32>,
+    brick_materials: Vec<u32>,
+    chunk_occupancy: Vec<u32>,
+    region_occupancy: Vec<u32>,
+    brick_materials_capacity: usize,
     last_center: Option<IVec3>,
     window_origin: IVec3,
     chunk_wrap_offset: IVec3,
-    pool: ThreadPool,
+    region_wrap_offset: IVec3,
+    device: wgpu::Device,
 }
 
 impl ChunkManager {
     pub fn new(device: &wgpu::Device) -> Self {
-        let data = vec![0u32; VIEW_VOLUME];
-        let chunk_states = vec![0u8; WINDOW_CHUNK_COUNT];
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Chunk Buffer"),
-            size: (VIEW_VOLUME * std::mem::size_of::<u32>()) as u64,
+        let brick_indices = vec![0u32; WINDOW_CHUNK_COUNT * BRICKS_PER_CHUNK];
+        let brick_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Chunk Brick Indices"),
+            size: (brick_indices.len() * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mut work_queue = BinaryHeap::with_capacity(WINDOW_CHUNK_COUNT);
-        let urgent_queue = VecDeque::with_capacity(WINDOW_CHUNK_COUNT);
-        let pending_dirty = Vec::with_capacity(WINDOW_CHUNK_COUNT * CHUNK_SIZE as usize);
-        let merged_dirty = Vec::with_capacity(WINDOW_CHUNK_COUNT * CHUNK_SIZE as usize);
-        let scratch_dirty = Vec::with_capacity(WINDOW_CHUNK_COUNT * CHUNK_SIZE as usize);
-        let pool = ThreadPoolBuilder::new()
-            .thread_name(|idx| format!("chunk-worker-{idx}"))
-            .build()
-            .expect("Failed to create chunk worker pool");
-
-        work_queue.clear();
+        let brick_materials = vec![0u32; 1];
+        let brick_materials_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Chunk Brick Materials"),
+            size: (brick_materials.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let chunk_occupancy = vec![0u32; WINDOW_CHUNK_COUNT];
+        let chunk_occupancy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Chunk Occupancy"),
+            size: (chunk_occupancy.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let region_occupancy = vec![0u32; WINDOW_REGION_COUNT];
+        let region_occupancy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Region Occupancy"),
+            size: (region_occupancy.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Self {
-            buffer,
-            data,
-            chunk_states,
-            work_queue,
-            urgent_queue,
-            pending_dirty,
-            merged_dirty,
-            scratch_dirty,
+            brick_index_buffer,
+            brick_materials_buffer,
+            chunk_occupancy_buffer,
+            region_occupancy_buffer,
+            brick_indices,
+            brick_materials,
+            chunk_occupancy,
+            region_occupancy,
+            brick_materials_capacity: 1,
             last_center: None,
             window_origin: IVec3::ZERO,
             chunk_wrap_offset: IVec3::ZERO,
-            pool,
+            region_wrap_offset: IVec3::ZERO,
+            device: device.clone(),
         }
     }
 
@@ -116,10 +93,11 @@ impl ChunkManager {
         queue: &wgpu::Queue,
         world: &World,
         center_chunk: IVec3,
-    ) {
+    ) -> bool {
         self.publish_center(center_chunk);
-        self.pump_cpu(world);
-        self.pump_gpu(queue);
+        let rebuild = self.rebuild_window(world);
+        let recreated = self.sync_gpu(queue);
+        rebuild || recreated
     }
 
     pub fn window_origin(&self) -> IVec3 {
@@ -130,12 +108,18 @@ impl ChunkManager {
         self.chunk_wrap_offset
     }
 
+    pub fn region_wrap_offset(&self) -> IVec3 {
+        self.region_wrap_offset
+    }
+
     fn publish_center(&mut self, center_chunk: IVec3) {
         let window_origin_chunk = center_chunk - IVec3::splat(VIEW_RADIUS_CHUNKS);
         let new_origin = window_origin_chunk * CHUNK_SIZE;
         let new_wrap = Self::wrap_chunk(window_origin_chunk);
+        let window_origin_region = window_origin_chunk / REGION_SIZE_CHUNKS;
+        let new_region_wrap = Self::wrap_region(window_origin_region);
         if self.last_center.is_none() {
-            self.reset_window(center_chunk, new_origin, new_wrap);
+            self.reset_window(center_chunk, new_origin, new_wrap, new_region_wrap);
             return;
         }
 
@@ -144,271 +128,143 @@ impl ChunkManager {
             return;
         }
 
-        let delta_chunks = center_chunk - last_center;
-        if delta_chunks
-            .abs()
-            .cmpge(IVec3::splat(VIEW_DIAMETER_CHUNKS))
-            .any()
-        {
-            self.reset_window(center_chunk, new_origin, new_wrap);
-            return;
-        }
-
         self.window_origin = new_origin;
         self.chunk_wrap_offset = new_wrap;
-        self.enqueue_exposed(delta_chunks);
+        self.region_wrap_offset = new_region_wrap;
         self.last_center = Some(center_chunk);
     }
 
-    fn reset_window(&mut self, center_chunk: IVec3, new_origin: IVec3, new_wrap: IVec3) {
-        self.data.fill(0);
-        self.chunk_states.fill(0);
-        self.work_queue.clear();
-        self.urgent_queue.clear();
-        self.pending_dirty.clear();
-        self.pending_dirty.push(DirtyRange {
-            start: 0,
-            end: VIEW_VOLUME,
-        });
+    fn reset_window(
+        &mut self,
+        center_chunk: IVec3,
+        new_origin: IVec3,
+        new_wrap: IVec3,
+        new_region_wrap: IVec3,
+    ) {
+        self.brick_indices.fill(0);
+        self.brick_materials.clear();
+        self.chunk_occupancy.fill(0);
+        self.region_occupancy.fill(0);
         self.window_origin = new_origin;
         self.chunk_wrap_offset = new_wrap;
+        self.region_wrap_offset = new_region_wrap;
         self.last_center = Some(center_chunk);
-        self.enqueue_full_window();
     }
 
-    fn enqueue_full_window(&mut self) {
+    fn rebuild_window(&mut self, world: &World) -> bool {
+        self.brick_indices.fill(0);
+        self.brick_materials.clear();
+        self.chunk_occupancy.fill(0);
+        self.region_occupancy.fill(0);
+
+        let mut brick_map: HashMap<usize, u32> = HashMap::new();
+        let mut next_brick_id: u32 = 1;
+        let window_origin_chunk = self.window_origin / CHUNK_SIZE;
         let size = VIEW_DIAMETER_CHUNKS as usize;
         for z in 0..size {
             for y in 0..size {
                 for x in 0..size {
-                    self.enqueue_chunk(IVec3::new(x as i32, y as i32, z as i32));
-                }
-            }
-        }
-    }
-
-    fn enqueue_exposed(&mut self, delta_chunks: IVec3) {
-        let size = VIEW_DIAMETER_CHUNKS as i32;
-        if delta_chunks.x > 0 {
-            let x = size - 1;
-            for z in 0..size {
-                for y in 0..size {
-                    self.enqueue_chunk_forced(IVec3::new(x, y, z));
-                }
-            }
-        } else if delta_chunks.x < 0 {
-            let x = 0;
-            for z in 0..size {
-                for y in 0..size {
-                    self.enqueue_chunk_forced(IVec3::new(x, y, z));
-                }
-            }
-        }
-
-        if delta_chunks.y > 0 {
-            let y = size - 1;
-            for z in 0..size {
-                for x in 0..size {
-                    self.enqueue_chunk_forced(IVec3::new(x, y, z));
-                }
-            }
-        } else if delta_chunks.y < 0 {
-            let y = 0;
-            for z in 0..size {
-                for x in 0..size {
-                    self.enqueue_chunk_forced(IVec3::new(x, y, z));
-                }
-            }
-        }
-
-        if delta_chunks.z > 0 {
-            let z = size - 1;
-            for y in 0..size {
-                for x in 0..size {
-                    self.enqueue_chunk_forced(IVec3::new(x, y, z));
-                }
-            }
-        } else if delta_chunks.z < 0 {
-            let z = 0;
-            for y in 0..size {
-                for x in 0..size {
-                    self.enqueue_chunk_forced(IVec3::new(x, y, z));
-                }
-            }
-        }
-    }
-
-    fn enqueue_chunk_forced(&mut self, chunk_offset: IVec3) {
-        let idx = self.storage_chunk_index(self.storage_chunk_offset(chunk_offset));
-        self.chunk_states[idx] = 0;
-        self.enqueue_chunk(chunk_offset);
-    }
-
-    fn enqueue_chunk(&mut self, chunk_offset: IVec3) {
-        let idx = self.storage_chunk_index(self.storage_chunk_offset(chunk_offset));
-        if self.chunk_states[idx] != 0 {
-            return;
-        }
-        self.chunk_states[idx] = 2;
-        let center = IVec3::splat(VIEW_RADIUS_CHUNKS);
-        let delta = chunk_offset - center;
-        let dist2 = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-        let priority = -dist2;
-        self.work_queue.push(WorkUnit {
-            chunk_offset,
-            priority,
-        });
-    }
-
-    fn pump_cpu(&mut self, world: &World) {
-        let mut budget = CPU_VOXEL_BUDGET;
-
-        while budget > 0 {
-            let work = if let Some(work) = self.urgent_queue.pop_front() {
-                Some(work)
-            } else {
-                self.work_queue.pop()
-            };
-
-            let Some(work_unit) = work else {
-                break;
-            };
-
-            if !self.is_chunk_in_window(work_unit.chunk_offset) {
-                continue;
-            }
-
-            let idx = self.storage_chunk_index(self.storage_chunk_offset(work_unit.chunk_offset));
-            if self.chunk_states[idx] == 1 {
-                continue;
-            }
-
-            if budget < CHUNK_VOLUME {
-                self.work_queue.push(work_unit);
-                break;
-            }
-
-            let storage_chunk = self.storage_chunk_offset(work_unit.chunk_offset);
-            let base_index = self.storage_chunk_index(storage_chunk) * CHUNK_VOLUME;
-            let pool = &self.pool;
-            let window_origin = self.window_origin;
-            let chunk_offset = work_unit.chunk_offset;
-            let chunk_slice = &mut self.data[base_index..base_index + CHUNK_VOLUME];
-            Self::compute_chunk(pool, world, window_origin, chunk_offset, chunk_slice);
-            let chunk_size = CHUNK_SIZE as usize;
-            for z in 0..chunk_size {
-                for y in 0..chunk_size {
-                    let row_start = base_index + chunk_size * (y + chunk_size * z);
-                    self.pending_dirty.push(DirtyRange {
-                        start: row_start,
-                        end: row_start + chunk_size,
-                    });
-                }
-            }
-            self.chunk_states[idx] = 1;
-            budget = budget.saturating_sub(CHUNK_VOLUME);
-        }
-    }
-
-    fn compute_chunk(
-        pool: &ThreadPool,
-        world: &World,
-        window_origin: IVec3,
-        chunk_offset: IVec3,
-        chunk_slice: &mut [u32],
-    ) {
-        let chunk_base = window_origin + chunk_offset * CHUNK_SIZE;
-        let chunk_size = CHUNK_SIZE as usize;
-        let plane_size = chunk_size * chunk_size;
-
-        pool.install(|| {
-            chunk_slice
-                .par_chunks_mut(plane_size)
-                .enumerate()
-                .for_each(|(z, plane)| {
-                    let voxel_z = chunk_base.z + z as i32;
-                    for y in 0..chunk_size {
-                        let voxel_y = chunk_base.y + y as i32;
-                        let row_start = y * chunk_size;
-                        for x in 0..chunk_size {
-                            let voxel_x = chunk_base.x + x as i32;
-                            let voxel = IVec3::new(voxel_x, voxel_y, voxel_z);
-                            let density = world.sample_density(voxel);
-                            let material = if density >= 0 {
-                                let index = world.sample_material(voxel);
-                                world.palette[index as usize]
-                            } else {
-                                0
-                            };
-                            plane[row_start + x] = material;
+                    let chunk_offset = IVec3::new(x as i32, y as i32, z as i32);
+                    let world_chunk = window_origin_chunk + chunk_offset;
+                    let idx = self.storage_chunk_index(self.storage_chunk_offset(chunk_offset));
+                    let base_index = idx * BRICKS_PER_CHUNK;
+                    let Some(chunk) = world.chunks.get(&world_chunk) else {
+                        continue;
+                    };
+                    let mut chunk_has_brick = false;
+                    let region_offset = chunk_offset / REGION_SIZE_CHUNKS;
+                    let region_index = self.storage_region_index(
+                        self.storage_region_offset(region_offset),
+                    );
+                    for bz in 0..BRICKS_PER_AXIS {
+                        for by in 0..BRICKS_PER_AXIS {
+                            for bx in 0..BRICKS_PER_AXIS {
+                                let brick_coord = IVec3::new(bx, by, bz);
+                                let brick_idx = Chunk::brick_index(brick_coord);
+                                let Some(brick_id) = chunk.bricks[brick_idx] else {
+                                    continue;
+                                };
+                                let brick = &world.brick_pool.bricks[brick_id];
+                                if brick.summary.state == BrickState::Empty {
+                                    continue;
+                                }
+                                chunk_has_brick = true;
+                                self.region_occupancy[region_index] = 1;
+                                let compact_id = if let Some(&compact) = brick_map.get(&brick_id) {
+                                    compact
+                                } else {
+                                    let compact = next_brick_id;
+                                    next_brick_id += 1;
+                                    brick_map.insert(brick_id, compact);
+                                    self.append_brick_materials(brick);
+                                    compact
+                                };
+                                self.brick_indices[base_index + brick_idx] = compact_id;
+                            }
                         }
                     }
-                });
-        });
-    }
-
-    fn pump_gpu(&mut self, queue: &wgpu::Queue) {
-        if self.pending_dirty.is_empty() {
-            return;
-        }
-
-        self.merged_dirty.clear();
-        self.merge_dirty_ranges();
-
-        let mut remaining_bytes = GPU_UPLOAD_BUDGET_BYTES;
-        self.scratch_dirty.clear();
-
-        for range in self.merged_dirty.drain(..) {
-            if remaining_bytes == 0 {
-                self.scratch_dirty.push(range);
-                continue;
-            }
-            let bytes = range.len() * std::mem::size_of::<u32>();
-            if bytes <= remaining_bytes {
-                queue.write_buffer(
-                    &self.buffer,
-                    (range.start * std::mem::size_of::<u32>()) as u64,
-                    bytemuck::cast_slice(&self.data[range.start..range.end]),
-                );
-                remaining_bytes = remaining_bytes.saturating_sub(bytes);
-            } else {
-                let max_elements = remaining_bytes / std::mem::size_of::<u32>();
-                let end = range.start + max_elements.max(1);
-                queue.write_buffer(
-                    &self.buffer,
-                    (range.start * std::mem::size_of::<u32>()) as u64,
-                    bytemuck::cast_slice(&self.data[range.start..end]),
-                );
-                self.scratch_dirty.push(DirtyRange { start: end, end: range.end });
-                remaining_bytes = 0;
-            }
-        }
-
-        self.pending_dirty.clear();
-        self.pending_dirty.append(&mut self.scratch_dirty);
-    }
-
-    fn merge_dirty_ranges(&mut self) {
-        self.pending_dirty.sort_unstable_by(|a, b| a.start.cmp(&b.start));
-        for range in self.pending_dirty.drain(..) {
-            if let Some(last) = self.merged_dirty.last_mut() {
-                if range.start <= last.end {
-                    last.end = last.end.max(range.end);
-                    continue;
+                    if chunk_has_brick {
+                        self.chunk_occupancy[idx] = 1;
+                    }
                 }
             }
-            self.merged_dirty.push(range);
         }
+
+        if self.brick_materials.is_empty() {
+            self.brick_materials.push(0);
+        }
+
+        true
     }
 
-    fn is_chunk_in_window(&self, chunk_offset: IVec3) -> bool {
-        let size = VIEW_DIAMETER_CHUNKS;
-        chunk_offset.x >= 0
-            && chunk_offset.y >= 0
-            && chunk_offset.z >= 0
-            && chunk_offset.x < size
-            && chunk_offset.y < size
-            && chunk_offset.z < size
+    fn append_brick_materials(&mut self, brick: &crate::svo::brick::Brick) {
+        let mut packed = [0u32; BRICK_PACKED_STRIDE_U32];
+        for (idx, material) in brick.material.iter().enumerate() {
+            let density = brick.density[idx];
+            let value = if density >= 0 { *material } else { 0 };
+            let word = idx / 4;
+            let shift = (idx % 4) * 8;
+            packed[word] |= (value as u32) << shift;
+        }
+        self.brick_materials.extend_from_slice(&packed);
+    }
+
+    fn sync_gpu(&mut self, queue: &wgpu::Queue) -> bool {
+        let mut recreated = false;
+        let needed_materials = self.brick_materials.len().max(1);
+        if needed_materials > self.brick_materials_capacity {
+            self.brick_materials_capacity = needed_materials;
+            self.brick_materials_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Chunk Brick Materials"),
+                size: (self.brick_materials_capacity * std::mem::size_of::<u32>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            recreated = true;
+        }
+
+        queue.write_buffer(
+            &self.brick_index_buffer,
+            0,
+            bytemuck::cast_slice(&self.brick_indices),
+        );
+        queue.write_buffer(
+            &self.brick_materials_buffer,
+            0,
+            bytemuck::cast_slice(&self.brick_materials),
+        );
+        queue.write_buffer(
+            &self.chunk_occupancy_buffer,
+            0,
+            bytemuck::cast_slice(&self.chunk_occupancy),
+        );
+        queue.write_buffer(
+            &self.region_occupancy_buffer,
+            0,
+            bytemuck::cast_slice(&self.region_occupancy),
+        );
+
+        recreated
     }
 
     fn chunk_index(x: usize, y: usize, z: usize, size: usize) -> usize {
@@ -434,12 +290,40 @@ impl ChunkManager {
         )
     }
 
+    fn storage_region_offset(&self, region_offset: IVec3) -> IVec3 {
+        let size = VIEW_DIAMETER_REGIONS;
+        let wrapped = region_offset + self.region_wrap_offset;
+        IVec3::new(
+            wrapped.x.rem_euclid(size),
+            wrapped.y.rem_euclid(size),
+            wrapped.z.rem_euclid(size),
+        )
+    }
+
+    fn storage_region_index(&self, region_offset: IVec3) -> usize {
+        Self::chunk_index(
+            region_offset.x as usize,
+            region_offset.y as usize,
+            region_offset.z as usize,
+            VIEW_DIAMETER_REGIONS as usize,
+        )
+    }
+
     fn wrap_chunk(chunk_coord: IVec3) -> IVec3 {
         let size = VIEW_DIAMETER_CHUNKS;
         IVec3::new(
             chunk_coord.x.rem_euclid(size),
             chunk_coord.y.rem_euclid(size),
             chunk_coord.z.rem_euclid(size),
+        )
+    }
+
+    fn wrap_region(region_coord: IVec3) -> IVec3 {
+        let size = VIEW_DIAMETER_REGIONS;
+        IVec3::new(
+            region_coord.x.rem_euclid(size),
+            region_coord.y.rem_euclid(size),
+            region_coord.z.rem_euclid(size),
         )
     }
 }
