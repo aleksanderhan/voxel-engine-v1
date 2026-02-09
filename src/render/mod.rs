@@ -4,3 +4,4 @@ pub mod layouts;
 pub mod pipelines;
 pub mod shaders;
 pub mod textures;
+pub mod gpu;
