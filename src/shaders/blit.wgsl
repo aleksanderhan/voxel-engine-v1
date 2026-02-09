@@ -10,6 +10,10 @@ struct Uniforms {
 
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
+@group(0) @binding(1)
+var color_texture: texture_2d<f32>;
+@group(0) @binding(2)
+var color_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -139,6 +143,7 @@ fn draw_crosshair(pixel: vec2<f32>, resolution: vec2<f32>) -> f32 {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let resolution = uniforms.resolution;
     let pixel = vec2<f32>(input.uv.x * resolution.x, (1.0 - input.uv.y) * resolution.y);
+    let scene_color = textureSample(color_texture, color_sampler, input.uv).rgb;
     let scale = 8.0;
     let margin = 20.0;
 
@@ -169,6 +174,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let hud_alpha = draw_text(pixel, origin, scale, ids);
     let crosshair_alpha = draw_crosshair(pixel, resolution);
     let alpha = max(hud_alpha, crosshair_alpha);
-    let color = vec3<f32>(1.0, 1.0, 1.0);
-    return vec4<f32>(color, alpha);
+    let hud_color = vec3<f32>(1.0, 1.0, 1.0);
+    let mixed = mix(scene_color, hud_color, alpha);
+    return vec4<f32>(mixed, 1.0);
 }

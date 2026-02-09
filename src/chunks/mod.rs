@@ -10,21 +10,32 @@ use crate::svo::world::World;
 pub const VIEW_RADIUS_CHUNKS: i32 = 7;
 pub const VIEW_DIAMETER_CHUNKS: i32 = VIEW_RADIUS_CHUNKS * 2 + 1;
 pub const VIEW_SIZE: i32 = CHUNK_SIZE * VIEW_DIAMETER_CHUNKS;
+pub const REGION_SIZE_CHUNKS: i32 = 4;
+pub const VIEW_DIAMETER_REGIONS: i32 =
+    (VIEW_DIAMETER_CHUNKS + REGION_SIZE_CHUNKS - 1) / REGION_SIZE_CHUNKS;
 
 const WINDOW_CHUNK_COUNT: usize = (VIEW_DIAMETER_CHUNKS as usize)
     * (VIEW_DIAMETER_CHUNKS as usize)
     * (VIEW_DIAMETER_CHUNKS as usize);
+const WINDOW_REGION_COUNT: usize = (VIEW_DIAMETER_REGIONS as usize)
+    * (VIEW_DIAMETER_REGIONS as usize)
+    * (VIEW_DIAMETER_REGIONS as usize);
 const BRICK_PACKED_STRIDE_U32: usize = (BRICK_VOLUME + 3) / 4;
 
 pub struct ChunkManager {
     pub brick_index_buffer: wgpu::Buffer,
     pub brick_materials_buffer: wgpu::Buffer,
+    pub chunk_occupancy_buffer: wgpu::Buffer,
+    pub region_occupancy_buffer: wgpu::Buffer,
     brick_indices: Vec<u32>,
     brick_materials: Vec<u32>,
+    chunk_occupancy: Vec<u32>,
+    region_occupancy: Vec<u32>,
     brick_materials_capacity: usize,
     last_center: Option<IVec3>,
     window_origin: IVec3,
     chunk_wrap_offset: IVec3,
+    region_wrap_offset: IVec3,
     device: wgpu::Device,
 }
 
@@ -44,16 +55,35 @@ impl ChunkManager {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let chunk_occupancy = vec![0u32; WINDOW_CHUNK_COUNT];
+        let chunk_occupancy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Chunk Occupancy"),
+            size: (chunk_occupancy.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let region_occupancy = vec![0u32; WINDOW_REGION_COUNT];
+        let region_occupancy_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Region Occupancy"),
+            size: (region_occupancy.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Self {
             brick_index_buffer,
             brick_materials_buffer,
+            chunk_occupancy_buffer,
+            region_occupancy_buffer,
             brick_indices,
             brick_materials,
+            chunk_occupancy,
+            region_occupancy,
             brick_materials_capacity: 1,
             last_center: None,
             window_origin: IVec3::ZERO,
             chunk_wrap_offset: IVec3::ZERO,
+            region_wrap_offset: IVec3::ZERO,
             device: device.clone(),
         }
     }
@@ -78,12 +108,18 @@ impl ChunkManager {
         self.chunk_wrap_offset
     }
 
+    pub fn region_wrap_offset(&self) -> IVec3 {
+        self.region_wrap_offset
+    }
+
     fn publish_center(&mut self, center_chunk: IVec3) {
         let window_origin_chunk = center_chunk - IVec3::splat(VIEW_RADIUS_CHUNKS);
         let new_origin = window_origin_chunk * CHUNK_SIZE;
         let new_wrap = Self::wrap_chunk(window_origin_chunk);
+        let window_origin_region = window_origin_chunk / REGION_SIZE_CHUNKS;
+        let new_region_wrap = Self::wrap_region(window_origin_region);
         if self.last_center.is_none() {
-            self.reset_window(center_chunk, new_origin, new_wrap);
+            self.reset_window(center_chunk, new_origin, new_wrap, new_region_wrap);
             return;
         }
 
@@ -94,20 +130,32 @@ impl ChunkManager {
 
         self.window_origin = new_origin;
         self.chunk_wrap_offset = new_wrap;
+        self.region_wrap_offset = new_region_wrap;
         self.last_center = Some(center_chunk);
     }
 
-    fn reset_window(&mut self, center_chunk: IVec3, new_origin: IVec3, new_wrap: IVec3) {
+    fn reset_window(
+        &mut self,
+        center_chunk: IVec3,
+        new_origin: IVec3,
+        new_wrap: IVec3,
+        new_region_wrap: IVec3,
+    ) {
         self.brick_indices.fill(0);
         self.brick_materials.clear();
+        self.chunk_occupancy.fill(0);
+        self.region_occupancy.fill(0);
         self.window_origin = new_origin;
         self.chunk_wrap_offset = new_wrap;
+        self.region_wrap_offset = new_region_wrap;
         self.last_center = Some(center_chunk);
     }
 
     fn rebuild_window(&mut self, world: &World) -> bool {
         self.brick_indices.fill(0);
         self.brick_materials.clear();
+        self.chunk_occupancy.fill(0);
+        self.region_occupancy.fill(0);
 
         let mut brick_map: HashMap<usize, u32> = HashMap::new();
         let mut next_brick_id: u32 = 1;
@@ -123,6 +171,11 @@ impl ChunkManager {
                     let Some(chunk) = world.chunks.get(&world_chunk) else {
                         continue;
                     };
+                    let mut chunk_has_brick = false;
+                    let region_offset = chunk_offset / REGION_SIZE_CHUNKS;
+                    let region_index = self.storage_region_index(
+                        self.storage_region_offset(region_offset),
+                    );
                     for bz in 0..BRICKS_PER_AXIS {
                         for by in 0..BRICKS_PER_AXIS {
                             for bx in 0..BRICKS_PER_AXIS {
@@ -135,6 +188,8 @@ impl ChunkManager {
                                 if brick.summary.state == BrickState::Empty {
                                     continue;
                                 }
+                                chunk_has_brick = true;
+                                self.region_occupancy[region_index] = 1;
                                 let compact_id = if let Some(&compact) = brick_map.get(&brick_id) {
                                     compact
                                 } else {
@@ -147,6 +202,9 @@ impl ChunkManager {
                                 self.brick_indices[base_index + brick_idx] = compact_id;
                             }
                         }
+                    }
+                    if chunk_has_brick {
+                        self.chunk_occupancy[idx] = 1;
                     }
                 }
             }
@@ -195,6 +253,16 @@ impl ChunkManager {
             0,
             bytemuck::cast_slice(&self.brick_materials),
         );
+        queue.write_buffer(
+            &self.chunk_occupancy_buffer,
+            0,
+            bytemuck::cast_slice(&self.chunk_occupancy),
+        );
+        queue.write_buffer(
+            &self.region_occupancy_buffer,
+            0,
+            bytemuck::cast_slice(&self.region_occupancy),
+        );
 
         recreated
     }
@@ -222,12 +290,40 @@ impl ChunkManager {
         )
     }
 
+    fn storage_region_offset(&self, region_offset: IVec3) -> IVec3 {
+        let size = VIEW_DIAMETER_REGIONS;
+        let wrapped = region_offset + self.region_wrap_offset;
+        IVec3::new(
+            wrapped.x.rem_euclid(size),
+            wrapped.y.rem_euclid(size),
+            wrapped.z.rem_euclid(size),
+        )
+    }
+
+    fn storage_region_index(&self, region_offset: IVec3) -> usize {
+        Self::chunk_index(
+            region_offset.x as usize,
+            region_offset.y as usize,
+            region_offset.z as usize,
+            VIEW_DIAMETER_REGIONS as usize,
+        )
+    }
+
     fn wrap_chunk(chunk_coord: IVec3) -> IVec3 {
         let size = VIEW_DIAMETER_CHUNKS;
         IVec3::new(
             chunk_coord.x.rem_euclid(size),
             chunk_coord.y.rem_euclid(size),
             chunk_coord.z.rem_euclid(size),
+        )
+    }
+
+    fn wrap_region(region_coord: IVec3) -> IVec3 {
+        let size = VIEW_DIAMETER_REGIONS;
+        IVec3::new(
+            region_coord.x.rem_euclid(size),
+            region_coord.y.rem_euclid(size),
+            region_coord.z.rem_euclid(size),
         )
     }
 }

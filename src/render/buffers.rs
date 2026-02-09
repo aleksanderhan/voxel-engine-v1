@@ -14,6 +14,7 @@ pub struct Uniforms {
     camera_up: [f32; 4],
     chunk_origin: [f32; 4],
     chunk_wrap_offset: [i32; 4],
+    region_wrap_offset: [i32; 4],
 }
 
 impl Uniforms {
@@ -27,6 +28,7 @@ impl Uniforms {
         camera_up: [f32; 4],
         chunk_origin: [f32; 4],
         chunk_wrap_offset: [i32; 4],
+        region_wrap_offset: [i32; 4],
     ) -> Self {
         Self {
             resolution: [size.width as f32, size.height as f32],
@@ -38,6 +40,7 @@ impl Uniforms {
             camera_up,
             chunk_origin,
             chunk_wrap_offset,
+            region_wrap_offset,
         }
     }
 
@@ -52,6 +55,7 @@ impl Uniforms {
         camera_up: [f32; 4],
         chunk_origin: [f32; 4],
         chunk_wrap_offset: [i32; 4],
+        region_wrap_offset: [i32; 4],
     ) {
         self.resolution = [size.width as f32, size.height as f32];
         self.time = time;
@@ -62,6 +66,7 @@ impl Uniforms {
         self.camera_up = camera_up;
         self.chunk_origin = chunk_origin;
         self.chunk_wrap_offset = chunk_wrap_offset;
+        self.region_wrap_offset = region_wrap_offset;
     }
 }
 
@@ -81,6 +86,7 @@ impl UniformBuffer {
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 0.9701, -0.2425, 0.0],
             [0.0, 0.0, 0.0, 0.0],
+            [0, 0, 0, 0],
             [0, 0, 0, 0],
         );
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -104,6 +110,7 @@ impl UniformBuffer {
         camera_up: [f32; 4],
         chunk_origin: [f32; 4],
         chunk_wrap_offset: [i32; 4],
+        region_wrap_offset: [i32; 4],
     ) {
         self.uniforms.update(
             size,
@@ -115,6 +122,7 @@ impl UniformBuffer {
             camera_up,
             chunk_origin,
             chunk_wrap_offset,
+            region_wrap_offset,
         );
         queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&self.uniforms));
     }
