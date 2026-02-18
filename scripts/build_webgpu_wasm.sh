@@ -8,6 +8,8 @@ PROFILE="release"
 OUT_DIR="$ROOT_DIR/web/dist"
 WEB_DIR="$ROOT_DIR/web"
 WASM_PATH="$ROOT_DIR/target/$TARGET/$PROFILE/${CRATE_NAME}.wasm"
+CARGO_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
+WASM_BINDGEN_BIN=""
 
 if ! command -v rustup >/dev/null 2>&1; then
   echo "error: rustup is required but was not found in PATH" >&2
@@ -19,9 +21,22 @@ if ! rustup target list --installed | grep -qx "$TARGET"; then
   rustup target add "$TARGET"
 fi
 
-if ! command -v wasm-bindgen >/dev/null 2>&1; then
+if command -v wasm-bindgen >/dev/null 2>&1; then
+  WASM_BINDGEN_BIN="$(command -v wasm-bindgen)"
+elif [ -x "$CARGO_BIN_DIR/wasm-bindgen" ]; then
+  WASM_BINDGEN_BIN="$CARGO_BIN_DIR/wasm-bindgen"
+else
   echo "Installing wasm-bindgen-cli"
   cargo install wasm-bindgen-cli
+
+  if [ -x "$CARGO_BIN_DIR/wasm-bindgen" ]; then
+    WASM_BINDGEN_BIN="$CARGO_BIN_DIR/wasm-bindgen"
+  elif command -v wasm-bindgen >/dev/null 2>&1; then
+    WASM_BINDGEN_BIN="$(command -v wasm-bindgen)"
+  else
+    echo "error: wasm-bindgen was installed but is not available in PATH or $CARGO_BIN_DIR" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$OUT_DIR"
@@ -29,8 +44,8 @@ mkdir -p "$OUT_DIR"
 echo "Building crate '$CRATE_NAME' for $TARGET ($PROFILE)..."
 cargo build --$PROFILE --target "$TARGET"
 
-echo "Generating browser bindings with wasm-bindgen..."
-wasm-bindgen \
+echo "Generating browser bindings with wasm-bindgen ($WASM_BINDGEN_BIN)..."
+"$WASM_BINDGEN_BIN" \
   --target web \
   --out-dir "$OUT_DIR" \
   "$WASM_PATH"
