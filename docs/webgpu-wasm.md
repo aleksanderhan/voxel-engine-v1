@@ -1,74 +1,42 @@
 # Build for WebGPU + WebAssembly
 
-This engine already type-checks for `wasm32-unknown-unknown`, so you can compile it for the web with the steps below.
+Use the one-command helper script to compile this engine for `wasm32-unknown-unknown`, generate browser bindings, and create a runnable `web/index.html`.
 
-## 1) Install required toolchains
+## Quick start
 
-```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli
-```
-
-## 2) Compile to `.wasm`
+From the repository root:
 
 ```bash
-cargo build --release --target wasm32-unknown-unknown
+./scripts/build_webgpu_wasm.sh
 ```
 
-This produces:
+The script will:
 
-- `target/wasm32-unknown-unknown/release/svo_engine.wasm`
+1. Ensure the Rust target `wasm32-unknown-unknown` is installed.
+2. Ensure `wasm-bindgen-cli` is installed.
+3. Build a release `.wasm` for this crate.
+4. Generate browser JS glue into `web/dist`.
+5. Write `web/index.html` that loads the generated module.
 
-## 3) Generate browser JS glue
+## Output artifacts
 
-```bash
-wasm-bindgen \
-  --target web \
-  --out-dir web/dist \
-  target/wasm32-unknown-unknown/release/svo_engine.wasm
-```
-
-This generates files such as:
+After a successful run:
 
 - `web/dist/svo_engine.js`
 - `web/dist/svo_engine_bg.wasm`
+- `web/index.html`
 
-## 4) Create a minimal web runner
-
-Create `web/index.html`:
-
-```html
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SVO Engine (WebGPU)</title>
-    <style>
-      html, body, canvas { margin: 0; width: 100%; height: 100%; background: #000; }
-      canvas { display: block; }
-    </style>
-  </head>
-  <body>
-    <script type="module">
-      import init from './dist/svo_engine.js';
-      await init();
-    </script>
-  </body>
-</html>
-```
-
-## 5) Serve locally (required for browser wasm/WebGPU)
+## Run locally
 
 ```bash
 python3 -m http.server 8080 -d web
 ```
 
-Then open:
+Open:
 
 - `http://localhost:8080`
 
-## 6) Browser requirements
+## Browser requirements
 
 - Use a current Chromium-based browser with WebGPU enabled (latest Chrome/Edge recommended).
 - WebGPU requires HTTPS in production (localhost is allowed for development).

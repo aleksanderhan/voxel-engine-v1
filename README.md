@@ -3,4 +3,18 @@ svo engine
 
 ## Build for WebGPU + WebAssembly
 
-See `docs/webgpu-wasm.md` for a step-by-step guide to compile this engine for `wasm32-unknown-unknown`, generate browser bindings, and run it locally in a browser.
+Run:
+
+```bash
+./scripts/build_webgpu_wasm.sh
+```
+
+Then serve the generated web output:
+
+```bash
+python3 -m http.server 8080 -d web
+```
+
+Open `http://localhost:8080` in a browser with WebGPU support.
+
+For additional details, see `docs/webgpu-wasm.md`.
