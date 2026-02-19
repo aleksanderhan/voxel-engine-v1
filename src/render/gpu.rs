@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use glam::Vec3;
+#[cfg(not(target_arch = "wasm32"))]
 use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -34,6 +35,7 @@ pub struct GpuState {
     pub output_sampler: wgpu::Sampler,
     pub chunk_origin: [f32; 4],
     last_chunk_coord: Option<glam::IVec3>,
+    #[cfg(not(target_arch = "wasm32"))]
     profiler: GpuProfiler,
     pass_stats: HashMap<String, PassTimingStats>,
     profile_enabled: bool,
@@ -77,10 +79,14 @@ impl GpuState {
             })
             .await
             .expect("Failed to find an adapter");
+        #[cfg(not(target_arch = "wasm32"))]
+        let required_features = adapter.features() & GpuProfiler::ALL_WGPU_TIMER_FEATURES;
+        #[cfg(target_arch = "wasm32")]
+        let required_features = wgpu::Features::empty();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Device"),
-                required_features: adapter.features() & GpuProfiler::ALL_WGPU_TIMER_FEATURES,
+                required_features,
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
@@ -154,6 +160,7 @@ impl GpuState {
         let blit_layout = create_blit_pipeline_layout(&device, &blit_bind_group.layout);
         let compute_pipeline = create_compute_pipeline(&device, &compute_layout, &shader);
         let blit_pipeline = create_blit_pipeline(&device, &config, &blit_layout, &blit_shader);
+        #[cfg(not(target_arch = "wasm32"))]
         let profiler = GpuProfiler::new(&device, GpuProfilerSettings::default())
             .expect("Failed to create GPU profiler");
 
@@ -176,6 +183,7 @@ impl GpuState {
             output_sampler,
             chunk_origin: [0.0, 0.0, 0.0, 0.0],
             last_chunk_coord: None,
+            #[cfg(not(target_arch = "wasm32"))]
             profiler,
             pass_stats: HashMap::new(),
             profile_enabled,
@@ -289,6 +297,7 @@ impl GpuState {
                 label: Some("Render Encoder"),
             });
 
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let mut frame_scope = self.profiler.scope("frame", &mut encoder);
 
@@ -325,25 +334,65 @@ impl GpuState {
             }
         }
 
+        #[cfg(target_arch = "wasm32")]
+        {
+            {
+                let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("raymarch compute"),
+                    timestamp_writes: None,
+                });
+                compute_pass.set_pipeline(&self.compute_pipeline);
+                compute_pass.set_bind_group(0, &self.scene_bind_group.bind_group, &[]);
+                let x_groups = (self.size.width + 7) / 8;
+                let y_groups = (self.size.height + 7) / 8;
+                compute_pass.dispatch_workgroups(x_groups, y_groups, 1);
+            }
+
+            {
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Blit Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                render_pass.set_pipeline(&self.blit_pipeline);
+                render_pass.set_bind_group(0, &self.blit_bind_group.bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         self.profiler.resolve_queries(&mut encoder);
         self.queue.submit(Some(encoder.finish()));
         output.present();
-        self.profiler.end_frame().expect("Failed to end GPU frame");
-        if let Some(profiling_data) =
-            self.profiler
-                .process_finished_frame(self.queue.get_timestamp_period())
+        #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = wgpu_profiler::chrometrace::write_chrometrace(
-                std::path::Path::new("wgpu-profile.json"),
-                &profiling_data,
-            );
-            if self.profile_enabled {
-                self.update_pass_stats(&profiling_data);
+            self.profiler.end_frame().expect("Failed to end GPU frame");
+            if let Some(profiling_data) = self
+                .profiler
+                .process_finished_frame(self.queue.get_timestamp_period())
+            {
+                let _ = wgpu_profiler::chrometrace::write_chrometrace(
+                    std::path::Path::new("wgpu-profile.json"),
+                    &profiling_data,
+                );
+                if self.profile_enabled {
+                    self.update_pass_stats(&profiling_data);
+                }
             }
         }
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn update_pass_stats(&mut self, results: &[wgpu_profiler::GpuTimerQueryResult]) {
         let mut stack = results.to_vec();
         while let Some(result) = stack.pop() {
