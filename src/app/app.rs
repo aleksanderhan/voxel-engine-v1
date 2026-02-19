@@ -7,7 +7,7 @@ use winit::{
     event::{DeviceEvent, KeyEvent, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{Key, NamedKey},
-    window::{CursorGrabMode, Fullscreen, Window, WindowId},
+    window::{CursorGrabMode, Window, WindowId},
 };
 
 use crate::app::{CameraController, InputState};
@@ -57,34 +57,15 @@ impl App {
             ..Self::default()
         }
     }
-}
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // Create the window on resume (this is the intended place in the new API).
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("SVO Engine")
-                        .with_inner_size(PhysicalSize::new(1280, 720)),
-                )
-                .unwrap(),
-        );
-
-        window.set_fullscreen(Some(Fullscreen::Borderless(None)));
-        if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
-            let _ = window.set_cursor_grab(CursorGrabMode::Confined);
-        }
-        window.set_cursor_visible(false);
-
-        self.window = Some(window);
-        let now = Instant::now();
-        self.start_time = Some(now);
-        self.last_frame = Some(now);
-
+    fn load_initial_world(&mut self) {
         if self.world.chunks.is_empty() {
-            match VoxFile::load("assets/models/house.vox") {
+            #[cfg(target_arch = "wasm32")]
+            let vox_result = VoxFile::from_bytes(include_bytes!("../../assets/models/house.vox"));
+            #[cfg(not(target_arch = "wasm32"))]
+            let vox_result = VoxFile::load("assets/models/house.vox");
+
+            match vox_result {
                 Ok(vox) => {
                     if let Some(model) = vox.models.first() {
                         let world_size = IVec3::new(
@@ -111,6 +92,50 @@ impl ApplicationHandler for App {
                 }
             }
         }
+    }
+
+    fn lock_cursor(window: &Window) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                let _ = window.set_cursor_grab(CursorGrabMode::Confined);
+            }
+            window.set_cursor_visible(false);
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = window;
+        }
+    }
+
+    fn unlock_cursor(window: &Window) {
+        let _ = window.set_cursor_grab(CursorGrabMode::None);
+        window.set_cursor_visible(true);
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // Create the window on resume (this is the intended place in the new API).
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("SVO Engine")
+                        .with_inner_size(PhysicalSize::new(1280, 720)),
+                )
+                .unwrap(),
+        );
+
+        Self::lock_cursor(&window);
+
+        self.window = Some(window);
+        let now = Instant::now();
+        self.start_time = Some(now);
+        self.last_frame = Some(now);
+
+        self.load_initial_world();
 
         if let Some(window) = &self.window {
             let mut state = pollster::block_on(GpuState::new(
@@ -146,13 +171,9 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(is_focused) => {
                 if let Some(window) = &self.window {
                     if is_focused {
-                        if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
-                            let _ = window.set_cursor_grab(CursorGrabMode::Confined);
-                        }
-                        window.set_cursor_visible(false);
+                        Self::lock_cursor(window);
                     } else {
-                        let _ = window.set_cursor_grab(CursorGrabMode::None);
-                        window.set_cursor_visible(true);
+                        Self::unlock_cursor(window);
                         self.input.clear_cursor();
                     }
                 }
