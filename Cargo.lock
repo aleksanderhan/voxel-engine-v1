@@ -1584,6 +1584,7 @@ dependencies = [
  "js-sys",
  "pollster",
  "rayon",
+ "wasm-bindgen-futures",
  "wgpu",
  "wgpu-profiler",
  "winit",

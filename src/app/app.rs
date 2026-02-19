@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+#[cfg(target_arch = "wasm32")]
+use std::{cell::RefCell, rc::Rc};
+
 #[cfg(not(target_arch = "wasm32"))]
 type AppInstant = std::time::Instant;
 #[cfg(target_arch = "wasm32")]
@@ -27,6 +30,8 @@ fn seconds_since(start: AppInstant, now: AppInstant) -> f32 {
 }
 
 use glam::{IVec3, Vec3};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -51,6 +56,8 @@ pub struct App {
     fps: f32,
     world: World,
     profile_enabled: bool,
+    #[cfg(target_arch = "wasm32")]
+    pending_state: Option<Rc<RefCell<Option<GpuState>>>>,
 }
 
 impl Default for App {
@@ -72,6 +79,8 @@ impl Default for App {
             fps: 0.0,
             world: World::new(),
             profile_enabled: false,
+            #[cfg(target_arch = "wasm32")]
+            pending_state: None,
         }
     }
 }
@@ -104,11 +113,14 @@ impl App {
                         let center = map_center;
                         self.world.import_vox_file(&vox, origin);
                         let max_y = origin.y + world_size.y - 1;
-                        let surface_y = self.world.surface_height_at(center.x, center.z, origin.y, max_y);
+                        let surface_y = self
+                            .world
+                            .surface_height_at(center.x, center.z, origin.y, max_y);
                         let camera_y = surface_y
                             .map(|height| height as f32 + 6.0)
                             .unwrap_or((max_y + 6) as f32);
-                        self.camera.position = Vec3::new(center.x as f32, camera_y, center.z as f32);
+                        self.camera.position =
+                            Vec3::new(center.x as f32, camera_y, center.z as f32);
                     } else {
                         self.world.import_vox_file(&vox, glam::IVec3::ZERO);
                     }
@@ -139,6 +151,21 @@ impl App {
         let _ = window.set_cursor_grab(CursorGrabMode::None);
         window.set_cursor_visible(true);
     }
+
+    #[cfg(target_arch = "wasm32")]
+    fn finalize_wasm_state_if_ready(&mut self) {
+        if self.state.is_some() {
+            return;
+        }
+        if let Some(pending) = self.pending_state.clone() {
+            let state = pending.borrow_mut().take();
+            if let Some(mut state) = state {
+                state.update_chunk_data(&self.world, self.camera.position);
+                self.state = Some(state);
+                self.pending_state = None;
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -164,12 +191,26 @@ impl ApplicationHandler for App {
         self.load_initial_world();
 
         if let Some(window) = &self.window {
-            let mut state = pollster::block_on(GpuState::new(
-                window.clone(),
-                self.profile_enabled,
-            ));
-            state.update_chunk_data(&self.world, self.camera.position);
-            self.state = Some(state);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let mut state =
+                    pollster::block_on(GpuState::new(window.clone(), self.profile_enabled));
+                state.update_chunk_data(&self.world, self.camera.position);
+                self.state = Some(state);
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                let pending = Rc::new(RefCell::new(None));
+                let pending_for_task = pending.clone();
+                let window = window.clone();
+                let profile_enabled = self.profile_enabled;
+                spawn_local(async move {
+                    let state = GpuState::new(window, profile_enabled).await;
+                    *pending_for_task.borrow_mut() = Some(state);
+                });
+                self.pending_state = Some(pending);
+            }
         }
     }
 
@@ -179,11 +220,16 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        #[cfg(target_arch = "wasm32")]
+        self.finalize_wasm_state_if_ready();
         self.input.process_window_event(&event);
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
-            WindowEvent::KeyboardInput { event: KeyEvent { logical_key, .. }, .. } => {
+            WindowEvent::KeyboardInput {
+                event: KeyEvent { logical_key, .. },
+                ..
+            } => {
                 if logical_key == Key::Named(NamedKey::Escape) {
                     event_loop.exit();
                 }
@@ -211,9 +257,7 @@ impl ApplicationHandler for App {
                     let elapsed = self
                         .start_time
                         .map_or(0.0, |start| seconds_since(start, now));
-                    let dt = self
-                        .last_frame
-                        .map_or(0.0, |last| seconds_since(last, now));
+                    let dt = self.last_frame.map_or(0.0, |last| seconds_since(last, now));
                     self.last_frame = Some(now);
                     if dt > 0.0 {
                         let instant_fps = 1.0 / dt;
@@ -255,6 +299,8 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(target_arch = "wasm32")]
+        self.finalize_wasm_state_if_ready();
         // Drive continuous redraw (optional).
         if let Some(window) = &self.window {
             window.request_redraw();
