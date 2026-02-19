@@ -1572,6 +1572,7 @@ dependencies = [
  "glam",
  "pollster",
  "rayon",
+ "web-time",
  "wgpu",
  "wgpu-profiler",
  "winit",

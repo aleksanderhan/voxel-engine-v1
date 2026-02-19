@@ -1,4 +1,9 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use glam::{IVec3, Vec3};
 use winit::{
