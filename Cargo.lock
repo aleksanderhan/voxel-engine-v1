@@ -1570,9 +1570,9 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
+ "js-sys",
  "pollster",
  "rayon",
- "web-time",
  "wgpu",
  "wgpu-profiler",
  "winit",

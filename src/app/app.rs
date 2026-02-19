@@ -1,9 +1,30 @@
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
+type AppInstant = std::time::Instant;
 #[cfg(target_arch = "wasm32")]
-use web_time::Instant;
+#[derive(Clone, Copy)]
+struct AppInstant(f64);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn app_now() -> AppInstant {
+    AppInstant::now()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn app_now() -> AppInstant {
+    AppInstant(js_sys::Date::now() / 1000.0)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn seconds_since(start: AppInstant, now: AppInstant) -> f32 {
+    (now - start).as_secs_f32()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn seconds_since(start: AppInstant, now: AppInstant) -> f32 {
+    (now.0 - start.0).max(0.0) as f32
+}
 
 use glam::{IVec3, Vec3};
 use winit::{
@@ -25,8 +46,8 @@ pub struct App {
     state: Option<GpuState>,
     input: InputState,
     camera: CameraController,
-    start_time: Option<Instant>,
-    last_frame: Option<Instant>,
+    start_time: Option<AppInstant>,
+    last_frame: Option<AppInstant>,
     fps: f32,
     world: World,
     profile_enabled: bool,
@@ -136,7 +157,7 @@ impl ApplicationHandler for App {
         Self::lock_cursor(&window);
 
         self.window = Some(window);
-        let now = Instant::now();
+        let now = app_now();
         self.start_time = Some(now);
         self.last_frame = Some(now);
 
@@ -186,11 +207,13 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 if let Some(state) = &mut self.state {
-                    let elapsed = self.start_time.map_or(0.0, |start| start.elapsed().as_secs_f32());
-                    let now = Instant::now();
+                    let now = app_now();
+                    let elapsed = self
+                        .start_time
+                        .map_or(0.0, |start| seconds_since(start, now));
                     let dt = self
                         .last_frame
-                        .map_or(0.0, |last| (now - last).as_secs_f32());
+                        .map_or(0.0, |last| seconds_since(last, now));
                     self.last_frame = Some(now);
                     if dt > 0.0 {
                         let instant_fps = 1.0 / dt;
