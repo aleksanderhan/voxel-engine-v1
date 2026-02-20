@@ -11,3 +11,8 @@ pollster = "0.4"
 glam = "0.29"
 bytemuck = { version = "1.25", features = ["derive"] }
 rayon = "1.10"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+wasm-bindgen-futures = "0.4"
