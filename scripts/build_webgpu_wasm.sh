@@ -81,9 +81,18 @@ cat > "$WEB_DIR/index.html" <<HTML
         }
       }
 
-      console.log('[support] wasmSupported =', wasmSupported);
-      console.log('[support] webGpuApiPresent =', webGpuApiPresent);
-      console.log('[support] webGpuAdapterAvailable =', webGpuAdapterAvailable);
+      console.warn('[support] wasmSupported =', wasmSupported);
+      console.warn('[support] webGpuApiPresent =', webGpuApiPresent);
+      console.warn('[support] webGpuAdapterAvailable =', webGpuAdapterAvailable);
+
+      if (!wasmSupported || !webGpuApiPresent || !webGpuAdapterAvailable) {
+        console.error('[support] Cannot start SVO Engine: missing required browser capabilities.', {
+          wasmSupported,
+          webGpuApiPresent,
+          webGpuAdapterAvailable,
+        });
+        return;
+      }
 
       await init();
     </script>
