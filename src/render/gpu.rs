@@ -68,15 +68,36 @@ impl GpuState {
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window.clone())
-             .map_err(|e| format!("Failed to create surface: {e}"))?;
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
+            .map_err(|e| format!("Failed to create surface: {e}"))?;
+        let mut adapter_error = String::new();
+        let mut adapter = None;
+        for options in [
+            wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|e| format!("Failed to find a compatible GPU adapter: {e}"))?;
+            },
+            wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            },
+        ] {
+            match instance.request_adapter(&options).await {
+                Ok(found_adapter) => {
+                    adapter = Some(found_adapter);
+                    break;
+                }
+                Err(error) => {
+                    adapter_error = error.to_string();
+                }
+            }
+        }
+        let adapter = adapter.ok_or_else(|| {
+            format!(
+                "No WebGPU adapter available (last error: {adapter_error}). If this is a browser environment, make sure WebGPU is enabled and supported on this device."
+            )
+        })?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Device"),
@@ -329,9 +350,9 @@ impl GpuState {
         self.queue.submit(Some(encoder.finish()));
         output.present();
         self.profiler.end_frame().expect("Failed to end GPU frame");
-        if let Some(profiling_data) =
-            self.profiler
-                .process_finished_frame(self.queue.get_timestamp_period())
+        if let Some(profiling_data) = self
+            .profiler
+            .process_finished_frame(self.queue.get_timestamp_period())
         {
             let _ = wgpu_profiler::chrometrace::write_chrometrace(
                 std::path::Path::new("wgpu-profile.json"),
