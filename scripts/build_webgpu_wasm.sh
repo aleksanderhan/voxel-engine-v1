@@ -65,6 +65,26 @@ cat > "$WEB_DIR/index.html" <<HTML
   <body>
     <script type="module">
       import init from './dist/${CRATE_NAME}.js';
+
+      const wasmSupported =
+        typeof WebAssembly === 'object' &&
+        typeof WebAssembly.instantiate === 'function';
+      const webGpuApiPresent = typeof navigator !== 'undefined' && !!navigator.gpu;
+
+      let webGpuAdapterAvailable = false;
+      if (webGpuApiPresent) {
+        try {
+          const adapter = await navigator.gpu.requestAdapter();
+          webGpuAdapterAvailable = !!adapter;
+        } catch (error) {
+          console.warn('[support] WebGPU adapter request failed:', error);
+        }
+      }
+
+      console.log('[support] wasmSupported =', wasmSupported);
+      console.log('[support] webGpuApiPresent =', webGpuApiPresent);
+      console.log('[support] webGpuAdapterAvailable =', webGpuAdapterAvailable);
+
       await init();
     </script>
   </body>
