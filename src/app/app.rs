@@ -193,10 +193,15 @@ impl ApplicationHandler for App {
         if let Some(window) = &self.window {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let mut state =
-                    pollster::block_on(GpuState::new(window.clone(), self.profile_enabled));
-                state.update_chunk_data(&self.world, self.camera.position);
-                self.state = Some(state);
+                match pollster::block_on(GpuState::new(window.clone(), self.profile_enabled)) {
+                    Ok(mut state) => {
+                        state.update_chunk_data(&self.world, self.camera.position);
+                        self.state = Some(state);
+                    }
+                    Err(error) => {
+                        eprintln!("GPU initialization failed: {error}");
+                    }
+                }
             }
 
             #[cfg(target_arch = "wasm32")]
@@ -206,8 +211,14 @@ impl ApplicationHandler for App {
                 let window = window.clone();
                 let profile_enabled = self.profile_enabled;
                 spawn_local(async move {
-                    let state = GpuState::new(window, profile_enabled).await;
-                    *pending_for_task.borrow_mut() = Some(state);
+                    match GpuState::new(window, profile_enabled).await {
+                        Ok(state) => {
+                            *pending_for_task.borrow_mut() = Some(state);
+                        }
+                        Err(error) => {
+                            eprintln!("GPU initialization failed: {error}");
+                        }
+                    }
                 });
                 self.pending_state = Some(pending);
             }

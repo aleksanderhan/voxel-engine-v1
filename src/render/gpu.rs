@@ -65,12 +65,12 @@ impl PassTimingStats {
 }
 
 impl GpuState {
-    pub async fn new(window: Arc<Window>, profile_enabled: bool) -> Self {
+    pub async fn new(window: Arc<Window>, profile_enabled: bool) -> Result<Self, String> {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window.clone())
-            .expect("Failed to create surface");
+            .map_err(|error| format!("Failed to create surface: {error}"))?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -78,7 +78,7 @@ impl GpuState {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("Failed to find an adapter");
+            .map_err(|error| format!("Failed to find a WebGPU adapter: {error}"))?;
         #[cfg(not(target_arch = "wasm32"))]
         let required_features = adapter.features() & GpuProfiler::ALL_WGPU_TIMER_FEATURES;
         #[cfg(target_arch = "wasm32")]
@@ -92,7 +92,7 @@ impl GpuState {
                 trace: wgpu::Trace::Off,
             })
             .await
-            .expect("Failed to create device");
+            .map_err(|error| format!("Failed to create device: {error}"))?;
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -162,9 +162,9 @@ impl GpuState {
         let blit_pipeline = create_blit_pipeline(&device, &config, &blit_layout, &blit_shader);
         #[cfg(not(target_arch = "wasm32"))]
         let profiler = GpuProfiler::new(&device, GpuProfilerSettings::default())
-            .expect("Failed to create GPU profiler");
+            .map_err(|error| format!("Failed to create GPU profiler: {error}"))?;
 
-        Self {
+        Ok(Self {
             window,
             surface,
             device,
@@ -187,7 +187,7 @@ impl GpuState {
             profiler,
             pass_stats: HashMap::new(),
             profile_enabled,
-        }
+        })
     }
 
     pub fn update_chunk_data(&mut self, world: &World, camera_pos: Vec3) {
