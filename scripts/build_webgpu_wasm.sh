@@ -66,35 +66,39 @@ cat > "$WEB_DIR/index.html" <<HTML
     <script type="module">
       import init from './dist/${CRATE_NAME}.js';
 
-      const wasmSupported =
-        typeof WebAssembly === 'object' &&
-        typeof WebAssembly.instantiate === 'function';
-      const webGpuApiPresent = typeof navigator !== 'undefined' && !!navigator.gpu;
+      async function bootstrap() {
+        const wasmSupported =
+          typeof WebAssembly === 'object' &&
+          typeof WebAssembly.instantiate === 'function';
+        const webGpuApiPresent = typeof navigator !== 'undefined' && !!navigator.gpu;
 
-      let webGpuAdapterAvailable = false;
-      if (webGpuApiPresent) {
-        try {
-          const adapter = await navigator.gpu.requestAdapter();
-          webGpuAdapterAvailable = !!adapter;
-        } catch (error) {
-          console.warn('[support] WebGPU adapter request failed:', error);
+        let webGpuAdapterAvailable = false;
+        if (webGpuApiPresent) {
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            webGpuAdapterAvailable = !!adapter;
+          } catch (error) {
+            console.warn('[support] WebGPU adapter request failed:', error);
+          }
         }
+
+        console.warn('[support] wasmSupported =', wasmSupported);
+        console.warn('[support] webGpuApiPresent =', webGpuApiPresent);
+        console.warn('[support] webGpuAdapterAvailable =', webGpuAdapterAvailable);
+
+        if (!wasmSupported || !webGpuApiPresent || !webGpuAdapterAvailable) {
+          console.error('[support] Cannot start SVO Engine: missing required browser capabilities.', {
+            wasmSupported,
+            webGpuApiPresent,
+            webGpuAdapterAvailable,
+          });
+          return;
+        }
+
+        await init();
       }
 
-      console.warn('[support] wasmSupported =', wasmSupported);
-      console.warn('[support] webGpuApiPresent =', webGpuApiPresent);
-      console.warn('[support] webGpuAdapterAvailable =', webGpuAdapterAvailable);
-
-      if (!wasmSupported || !webGpuApiPresent || !webGpuAdapterAvailable) {
-        console.error('[support] Cannot start SVO Engine: missing required browser capabilities.', {
-          wasmSupported,
-          webGpuApiPresent,
-          webGpuAdapterAvailable,
-        });
-        return;
-      }
-
-      await init();
+      bootstrap();
     </script>
   </body>
 </html>
