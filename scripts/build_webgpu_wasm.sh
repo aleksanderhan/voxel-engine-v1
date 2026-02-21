@@ -40,6 +40,7 @@ else
 fi
 
 mkdir -p "$OUT_DIR"
+mkdir -p "$WEB_DIR/.well-known/appspecific"
 
 echo "Building crate '$CRATE_NAME' for $TARGET ($PROFILE)..."
 cargo build --$PROFILE --target "$TARGET"
@@ -56,6 +57,7 @@ cat > "$WEB_DIR/index.html" <<HTML
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>SVO Engine (WebGPU + WASM)</title>
     <style>
       html, body, canvas { margin: 0; width: 100%; height: 100%; background: #000; }
@@ -95,6 +97,17 @@ cat > "$WEB_DIR/index.html" <<HTML
   </body>
 </html>
 HTML
+
+cat > "$WEB_DIR/.well-known/appspecific/com.chrome.devtools.json" <<JSON
+{}
+JSON
+
+cat > "$WEB_DIR/favicon.svg" <<SVG
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#000" />
+  <path d="M12 16h40v8H12zm0 16h40v8H12zm0 16h28v8H12z" fill="#3ddc97" />
+</svg>
+SVG
 
 echo
 cat <<MSG
