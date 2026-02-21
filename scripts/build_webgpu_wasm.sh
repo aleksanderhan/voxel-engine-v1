@@ -72,30 +72,22 @@ cat > "$WEB_DIR/index.html" <<HTML
           typeof WebAssembly.instantiate === 'function';
         const webGpuApiPresent = typeof navigator !== 'undefined' && !!navigator.gpu;
 
-        let webGpuAdapterAvailable = false;
-        if (webGpuApiPresent) {
-          try {
-            const adapter = await navigator.gpu.requestAdapter();
-            webGpuAdapterAvailable = !!adapter;
-          } catch (error) {
-            console.warn('[support] WebGPU adapter request failed:', error);
-          }
-        }
-
         console.warn('[support] wasmSupported =', wasmSupported);
         console.warn('[support] webGpuApiPresent =', webGpuApiPresent);
-        console.warn('[support] webGpuAdapterAvailable =', webGpuAdapterAvailable);
 
-        if (!wasmSupported || !webGpuApiPresent || !webGpuAdapterAvailable) {
+        if (!wasmSupported || !webGpuApiPresent) {
           console.error('[support] Cannot start SVO Engine: missing required browser capabilities.', {
             wasmSupported,
             webGpuApiPresent,
-            webGpuAdapterAvailable,
           });
           return;
         }
 
-        await init();
+        try {
+          await init();
+        } catch (error) {
+          console.error('[support] SVO Engine init failed. WebGPU may be unavailable (no adapter/device).', error);
+        }
       }
 
       bootstrap();
