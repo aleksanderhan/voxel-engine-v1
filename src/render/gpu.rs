@@ -63,20 +63,41 @@ impl PassTimingStats {
 }
 
 impl GpuState {
-    pub async fn new(window: Arc<Window>, profile_enabled: bool) -> Self {
+    pub async fn new(window: Arc<Window>, profile_enabled: bool) -> Result<Self, String> {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window.clone())
-            .expect("Failed to create surface");
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
+            .map_err(|e| format!("Failed to create surface: {e}"))?;
+        let mut adapter_error = String::new();
+        let mut adapter = None;
+        for options in [
+            wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
-            })
-            .await
-            .expect("Failed to find an adapter");
+            },
+            wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            },
+        ] {
+            match instance.request_adapter(&options).await {
+                Ok(found_adapter) => {
+                    adapter = Some(found_adapter);
+                    break;
+                }
+                Err(error) => {
+                    adapter_error = error.to_string();
+                }
+            }
+        }
+        let adapter = adapter.ok_or_else(|| {
+            format!(
+                "No WebGPU adapter available (last error: {adapter_error}). If this is a browser environment, make sure WebGPU is enabled and supported on this device."
+            )
+        })?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Device"),
@@ -86,7 +107,7 @@ impl GpuState {
                 trace: wgpu::Trace::Off,
             })
             .await
-            .expect("Failed to create device");
+            .map_err(|e| format!("Failed to create device: {e}"))?;
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -155,9 +176,9 @@ impl GpuState {
         let compute_pipeline = create_compute_pipeline(&device, &compute_layout, &shader);
         let blit_pipeline = create_blit_pipeline(&device, &config, &blit_layout, &blit_shader);
         let profiler = GpuProfiler::new(&device, GpuProfilerSettings::default())
-            .expect("Failed to create GPU profiler");
+            .map_err(|e| format!("Failed to create GPU profiler: {e}"))?;
 
-        Self {
+        Ok(Self {
             window,
             surface,
             device,
@@ -179,7 +200,7 @@ impl GpuState {
             profiler,
             pass_stats: HashMap::new(),
             profile_enabled,
-        }
+        })
     }
 
     pub fn update_chunk_data(&mut self, world: &World, camera_pos: Vec3) {
@@ -329,9 +350,9 @@ impl GpuState {
         self.queue.submit(Some(encoder.finish()));
         output.present();
         self.profiler.end_frame().expect("Failed to end GPU frame");
-        if let Some(profiling_data) =
-            self.profiler
-                .process_finished_frame(self.queue.get_timestamp_period())
+        if let Some(profiling_data) = self
+            .profiler
+            .process_finished_frame(self.queue.get_timestamp_period())
         {
             let _ = wgpu_profiler::chrometrace::write_chrometrace(
                 std::path::Path::new("wgpu-profile.json"),

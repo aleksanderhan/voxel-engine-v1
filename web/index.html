@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>SVO Engine (WebGPU + WASM)</title>
     <style>
       html, body, canvas { margin: 0; width: 100%; height: 100%; background: #000; }
@@ -12,7 +13,32 @@
   <body>
     <script type="module">
       import init from './dist/svo_engine.js';
-      await init();
+
+      async function bootstrap() {
+        const wasmSupported =
+          typeof WebAssembly === 'object' &&
+          typeof WebAssembly.instantiate === 'function';
+        const webGpuApiPresent = typeof navigator !== 'undefined' && !!navigator.gpu;
+
+        console.warn('[support] wasmSupported =', wasmSupported);
+        console.warn('[support] webGpuApiPresent =', webGpuApiPresent);
+
+        if (!wasmSupported || !webGpuApiPresent) {
+          console.error('[support] Cannot start SVO Engine: missing required browser capabilities.', {
+            wasmSupported,
+            webGpuApiPresent,
+          });
+          return;
+        }
+
+        try {
+          await init();
+        } catch (error) {
+          console.error('[support] SVO Engine init failed. WebGPU may be unavailable (no adapter/device).', error);
+        }
+      }
+
+      bootstrap();
     </script>
   </body>
 </html>

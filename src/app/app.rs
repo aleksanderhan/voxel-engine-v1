@@ -1,4 +1,14 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+use std::{cell::RefCell, rc::Rc};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
 
 use glam::{IVec3, Vec3};
 use winit::{
@@ -25,6 +35,8 @@ pub struct App {
     fps: f32,
     world: World,
     profile_enabled: bool,
+    #[cfg(target_arch = "wasm32")]
+    pending_state: Option<Rc<RefCell<Option<Result<GpuState, String>>>>>,
 }
 
 impl Default for App {
@@ -46,6 +58,8 @@ impl Default for App {
             fps: 0.0,
             world: World::new(),
             profile_enabled: false,
+            #[cfg(target_arch = "wasm32")]
+            pending_state: None,
         }
     }
 }
@@ -138,12 +152,29 @@ impl ApplicationHandler for App {
         self.load_initial_world();
 
         if let Some(window) = &self.window {
-            let mut state = pollster::block_on(GpuState::new(
-                window.clone(),
-                self.profile_enabled,
-            ));
-            state.update_chunk_data(&self.world, self.camera.position);
-            self.state = Some(state);
+            #[cfg(not(target_arch = "wasm32"))]
+            match pollster::block_on(GpuState::new(window.clone(), self.profile_enabled)) {
+                Ok(mut state) => {
+                    state.update_chunk_data(&self.world, self.camera.position);
+                    self.state = Some(state);
+                }
+                Err(error) => {
+                    eprintln!("GPU initialization failed: {error}");
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                let pending_state = Rc::new(RefCell::new(None));
+                let pending_state_task = pending_state.clone();
+                let window = window.clone();
+                let profile_enabled = self.profile_enabled;
+                spawn_local(async move {
+                    let state = GpuState::new(window, profile_enabled).await;
+                    *pending_state_task.borrow_mut() = Some(state);
+                });
+                self.pending_state = Some(pending_state);
+            }
         }
     }
 
@@ -180,6 +211,27 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
+                #[cfg(target_arch = "wasm32")]
+                if self.state.is_none() {
+                    let pending_result = self
+                        .pending_state
+                        .as_ref()
+                        .and_then(|pending_state| pending_state.borrow_mut().take());
+                    if let Some(result) = pending_result {
+                        match result {
+                            Ok(mut state) => {
+                                state.update_chunk_data(&self.world, self.camera.position);
+                                self.state = Some(state);
+                                self.pending_state = None;
+                            }
+                            Err(error) => {
+                                eprintln!("GPU initialization failed: {error}");
+                                self.pending_state = None;
+                            }
+                        }
+                    }
+                }
+
                 if let Some(state) = &mut self.state {
                     let elapsed = self.start_time.map_or(0.0, |start| start.elapsed().as_secs_f32());
                     let now = Instant::now();

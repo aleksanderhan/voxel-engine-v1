@@ -11,3 +11,5 @@ pollster = "0.4"
 glam = "0.29"
 bytemuck = { version = "1.25", features = ["derive"] }
 rayon = "1.10"
+web-time = "1.1"
+wasm-bindgen-futures = "0.4"
