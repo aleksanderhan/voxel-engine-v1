@@ -80,7 +80,12 @@ impl VoxFile {
                         let z = data[cursor + 2];
                         let color_index = data[cursor + 3];
                         cursor += 4;
-                        voxels.push(VoxVoxel { x, y, z, color_index });
+                        voxels.push(VoxVoxel {
+                            x,
+                            y,
+                            z,
+                            color_index,
+                        });
                     }
                     let size = current_size.unwrap_or([0, 0, 0]);
                     models.push(VoxModel { size, voxels });
@@ -102,8 +107,7 @@ impl VoxFile {
                         }
                     }
                 }
-                _ => {
-                }
+                _ => {}
             }
             let content_end = content_start + content_size;
             if cursor < content_end {
