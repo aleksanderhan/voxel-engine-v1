@@ -8,6 +8,7 @@ winit = "0.30"
 wgpu = "25.0"
 wgpu-profiler = "0.23"
 pollster = "0.4"
+web-time = "1.1"
 glam = "0.29"
 bytemuck = { version = "1.25", features = ["derive"] }
 rayon = "1.10"

@@ -20,7 +20,11 @@ pub fn wasm_start() {
 }
 
 fn run() {
+    #[cfg(not(target_arch = "wasm32"))]
     let profile_enabled = std::env::args().any(|arg| arg == "--profile");
+
+    #[cfg(target_arch = "wasm32")]
+    let profile_enabled = false;
     let event_loop = winit::event_loop::EventLoop::<app::AppEvent>::with_user_event()
         .build()
         .unwrap();

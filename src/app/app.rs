@@ -1,4 +1,6 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
+
+use web_time::Instant;
 
 use glam::{IVec3, Vec3};
 use winit::{

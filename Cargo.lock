@@ -1585,6 +1585,7 @@ dependencies = [
  "rayon",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-time",
  "wgpu",
  "wgpu-profiler",
  "winit",
